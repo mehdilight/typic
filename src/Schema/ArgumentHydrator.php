@@ -18,6 +18,7 @@ use Typic\Attribute\InputType;
 use Typic\Attribute\Payload as PayloadAttr;
 use Typic\Context;
 use Typic\DataLoader\DataLoader;
+use Typic\Subscription\PubSub\PubSubInterface;
 
 class ArgumentHydrator
 {
@@ -107,6 +108,13 @@ class ArgumentHydrator
             // Check if parameter is ResolveInfo
             if ($typeName === ResolveInfo::class) {
                 return $info;
+            }
+
+            // Check if parameter is PubSubInterface
+            if ($typeName === PubSubInterface::class || is_subclass_of($typeName, PubSubInterface::class)) {
+                if ($context instanceof Context && $context->has('pubSub')) {
+                    return $context->get('pubSub');
+                }
             }
 
             // Check if parameter matches source object (for ResolveField / Field resolvers)

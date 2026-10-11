@@ -37,7 +37,9 @@ class TypicServer implements RequestHandlerInterface
         private bool $corsEnabled = true,
         private array $corsOptions = [],
         private ?SubscriptionServer $subscriptionServer = null,
+        private ?PubSubInterface $pubSub = null,
     ) {
+        $this->pubSub ??= $this->subscriptionServer?->getPubSub();
         $this->sandbox = new ApolloSandboxRenderer();
     }
 
@@ -118,6 +120,7 @@ class TypicServer implements RequestHandlerInterface
         $context = new Context([
             'request' => $request,
             'container' => $this->container,
+            'pubSub' => $this->pubSub,
         ]);
 
         $result = $this->execute($query, $variables, null, $context, $operationName);
@@ -146,7 +149,10 @@ class TypicServer implements RequestHandlerInterface
         mixed $context = null,
         ?string $operationName = null,
     ): array {
-        $context ??= new Context(['container' => $this->container]);
+        $context ??= new Context([
+            'container' => $this->container,
+            'pubSub' => $this->pubSub,
+        ]);
 
         $debugFlag = $this->debug
             ? DebugFlag::INCLUDE_DEBUG_MESSAGE | DebugFlag::INCLUDE_TRACE

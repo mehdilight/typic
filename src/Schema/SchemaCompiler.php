@@ -488,6 +488,8 @@ class SchemaCompiler
                 if ($pTypeName === $skipSourceClass ||
                     $pTypeName === 'Typic\Context' ||
                     $pTypeName === ResolveInfo::class ||
+                    $pTypeName === 'Typic\Subscription\PubSub\PubSubInterface' ||
+                    is_subclass_of($pTypeName, 'Typic\Subscription\PubSub\PubSubInterface') ||
                     is_subclass_of($pTypeName, 'Typic\DataLoader\DataLoader') ||
                     ($this->container !== null && $this->container->has($pTypeName))) {
                     continue;

@@ -248,6 +248,7 @@ class TypicBuilder
             corsEnabled: $this->corsEnabled,
             corsOptions: $this->corsOptions,
             subscriptionServer: $subscriptionServer,
+            pubSub: $this->pubSub,
         );
     }
 }

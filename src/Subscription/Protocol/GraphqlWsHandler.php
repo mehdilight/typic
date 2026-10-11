@@ -172,6 +172,7 @@ class GraphqlWsHandler
         $context = new Context([
             'connection' => $connection,
             'container' => $this->container,
+            'pubSub' => $this->pubSub,
         ]);
 
         $subscriptionType = $this->schema->getSubscriptionType()
