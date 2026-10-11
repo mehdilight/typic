@@ -214,6 +214,8 @@ class TypicTest extends TestCase
         $response = $server->handle($request);
         $this->assertSame(200, $response->getStatusCode());
         $this->assertStringContainsString('application/json', $response->getHeaderLine('Content-Type'));
+        $this->assertSame('*', $response->getHeaderLine('Access-Control-Allow-Origin'));
+        $this->assertSame('true', $response->getHeaderLine('Access-Control-Allow-Credentials'));
 
         $body = json_decode((string) $response->getBody(), true);
         $this->assertCount(3, $body['data']['posts']);
@@ -227,6 +229,23 @@ class TypicTest extends TestCase
         $this->assertStringContainsString('text/html', $htmlResponse->getHeaderLine('Content-Type'));
         $this->assertStringContainsString('Typic Apollo Sandbox', (string) $htmlResponse->getBody());
         $this->assertStringContainsString('embeddable-sandbox.cdn.apollographql.com', (string) $htmlResponse->getBody());
+
+        // 3. OPTIONS CORS Preflight
+        $optionsRequest = new ServerRequest('OPTIONS', '/graphql', [
+            'Origin' => 'https://studio.apollographql.com',
+            'Access-Control-Request-Method' => 'POST',
+            'Access-Control-Request-Headers' => 'content-type, apollo-require-preflight',
+        ]);
+        $optionsResponse = $server->handle($optionsRequest);
+        $this->assertSame(204, $optionsResponse->getStatusCode());
+        $this->assertSame('https://studio.apollographql.com', $optionsResponse->getHeaderLine('Access-Control-Allow-Origin'));
+        $this->assertStringContainsString('POST', $optionsResponse->getHeaderLine('Access-Control-Allow-Methods'));
+        $this->assertStringContainsString('apollo-require-preflight', $optionsResponse->getHeaderLine('Access-Control-Allow-Headers'));
+
+        // 4. Introspection Query
+        $introResult = $server->execute(\GraphQL\Type\Introspection::getIntrospectionQuery());
+        $this->assertArrayNotHasKey('errors', $introResult);
+        $this->assertArrayHasKey('__schema', $introResult['data']);
     }
 
     public function test_directory_scanner_auto_discovery(): void

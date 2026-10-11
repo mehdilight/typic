@@ -31,6 +31,9 @@ class TypicBuilder
     /** @var array<string, mixed> */
     private array $sandboxOptions = [];
     private bool $debug = false;
+    private bool $corsEnabled = true;
+    /** @var array<string, mixed> */
+    private array $corsOptions = [];
 
     /**
      * @var array<string, mixed>
@@ -141,6 +144,19 @@ class TypicBuilder
     }
 
     /**
+     * Enable or disable CORS headers and preflight handling.
+     *
+     * @param array<string, mixed> $options
+     * @return $this
+     */
+    public function withCors(bool $enabled = true, array $options = []): self
+    {
+        $this->corsEnabled = $enabled;
+        $this->corsOptions = $options;
+        return $this;
+    }
+
+    /**
      * Build the configured TypicServer instance.
      */
     public function build(): TypicServer
@@ -182,6 +198,8 @@ class TypicBuilder
             sandboxEndpoint: $this->sandboxEndpoint,
             debug: $this->debug,
             options: $options,
+            corsEnabled: $this->corsEnabled,
+            corsOptions: $this->corsOptions,
         );
     }
 }

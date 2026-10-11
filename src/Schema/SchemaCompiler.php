@@ -278,7 +278,7 @@ class SchemaCompiler
 
     /**
      * @param ReflectionClass<object> $ref
-     * @return array<string, array{name: string, type: \GraphQL\Type\Definition\InputType&Type, description: ?string, defaultValue: mixed}>
+     * @return array<string, array{name: string, type: \GraphQL\Type\Definition\InputType&Type, description: ?string, defaultValue?: mixed}>
      */
     private function buildInputFields(ReflectionClass $ref): array
     {
@@ -299,12 +299,15 @@ class SchemaCompiler
 
                 /** @var \GraphQL\Type\Definition\InputType&Type $fieldType */
                 $fieldType = $this->determineInputType($param, $fieldAttr);
-                $fields[$pName] = [
+                $config = [
                     'name' => $pName,
                     'type' => $fieldType,
                     'description' => $this->extractDescription($param, $fieldAttr?->description),
-                    'defaultValue' => $param->isDefaultValueAvailable() ? $param->getDefaultValue() : null,
                 ];
+                if ($param->isDefaultValueAvailable()) {
+                    $config['defaultValue'] = $param->getDefaultValue();
+                }
+                $fields[$pName] = $config;
             }
         }
 
@@ -323,12 +326,15 @@ class SchemaCompiler
 
             /** @var \GraphQL\Type\Definition\InputType&Type $fieldType */
             $fieldType = $this->determinePropertyInputType($prop, $fieldAttr);
-            $fields[$pName] = [
+            $config = [
                 'name' => $pName,
                 'type' => $fieldType,
                 'description' => $this->extractDescription($prop, $fieldAttr?->description),
-                'defaultValue' => $prop->hasDefaultValue() ? $prop->getDefaultValue() : null,
             ];
+            if ($prop->hasDefaultValue()) {
+                $config['defaultValue'] = $prop->getDefaultValue();
+            }
+            $fields[$pName] = $config;
         }
 
         return $fields;

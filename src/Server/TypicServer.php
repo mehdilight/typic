@@ -23,6 +23,7 @@ class TypicServer implements RequestHandlerInterface
 
     /**
      * @param array<string, mixed> $options
+     * @param array<string, mixed> $corsOptions
      */
     public function __construct(
         private Schema $schema,
@@ -31,6 +32,8 @@ class TypicServer implements RequestHandlerInterface
         private string $sandboxEndpoint = '/graphql',
         private bool $debug = false,
         private array $options = [],
+        private bool $corsEnabled = true,
+        private array $corsOptions = [],
     ) {
         $this->sandbox = new ApolloSandboxRenderer();
     }
@@ -49,22 +52,38 @@ class TypicServer implements RequestHandlerInterface
     }
 
     /**
+     * @return array<string, mixed>
+     */
+    public function getCorsOptions(): array
+    {
+        return $this->corsOptions;
+    }
+
+    /**
      * PSR-15 RequestHandlerInterface implementation.
      */
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
         $method = strtoupper($request->getMethod());
 
+        // Handle CORS preflight OPTIONS request
+        if ($this->corsEnabled && $method === 'OPTIONS') {
+            return $this->handleCorsPreflight($request);
+        }
+
         // Check if browser is requesting Apollo Sandbox HTML
         if ($method === 'GET') {
             $accept = $request->getHeaderLine('Accept');
             $queryParams = $request->getQueryParams();
 
-            if ($this->sandboxEnabled && (!isset($queryParams['query']) || str_contains($accept, 'text/html'))) {
+            if ($this->sandboxEnabled && !isset($queryParams['query']) && (str_contains($accept, 'text/html') || $accept === '*/*' || $accept === '')) {
                 /** @var array<string, mixed> $sandboxOpts */
                 $sandboxOpts = $this->options['sandbox'] ?? $this->options;
                 $html = $this->sandbox->render($this->sandboxEndpoint, $sandboxOpts);
-                return new Response(200, ['Content-Type' => 'text/html; charset=UTF-8'], $html);
+                return $this->attachCorsHeaders(
+                    new Response(200, ['Content-Type' => 'text/html; charset=UTF-8'], $html),
+                    $request
+                );
             }
         }
 
@@ -76,7 +95,10 @@ class TypicServer implements RequestHandlerInterface
 
         if ($query === '') {
             $payload = json_encode(['errors' => [['message' => 'GraphQL query is required']]]);
-            return new Response(400, ['Content-Type' => 'application/json; charset=UTF-8'], (string) $payload);
+            return $this->attachCorsHeaders(
+                new Response(400, ['Content-Type' => 'application/json; charset=UTF-8'], (string) $payload),
+                $request
+            );
         }
 
         // Build request context
@@ -88,10 +110,13 @@ class TypicServer implements RequestHandlerInterface
         $result = $this->execute($query, $variables, null, $context, $operationName);
         $status = 200;
 
-        return new Response(
-            $status,
-            ['Content-Type' => 'application/json; charset=UTF-8'],
-            (string) json_encode($result)
+        return $this->attachCorsHeaders(
+            new Response(
+                $status,
+                ['Content-Type' => 'application/json; charset=UTF-8'],
+                (string) json_encode($result)
+            ),
+            $request
         );
     }
 
@@ -187,4 +212,49 @@ class TypicServer implements RequestHandlerInterface
 
         return [];
     }
+
+    private function handleCorsPreflight(ServerRequestInterface $request): ResponseInterface
+    {
+        $origin = $request->getHeaderLine('Origin');
+        $allowOrigin = is_string($this->corsOptions['origin'] ?? null)
+            ? $this->corsOptions['origin']
+            : ($origin !== '' ? $origin : '*');
+
+        $requestHeaders = $request->getHeaderLine('Access-Control-Request-Headers');
+        $allowHeaders = is_string($this->corsOptions['headers'] ?? null)
+            ? $this->corsOptions['headers']
+            : ($requestHeaders !== ''
+                ? $requestHeaders
+                : 'Content-Type, Authorization, X-Requested-With, Apollo-Require-Preflight, X-Apollo-Operation-Name');
+
+        $headers = [
+            'Access-Control-Allow-Origin' => $allowOrigin,
+            'Access-Control-Allow-Methods' => 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers' => $allowHeaders,
+            'Access-Control-Allow-Credentials' => 'true',
+            'Access-Control-Max-Age' => '86400',
+            'Content-Length' => '0',
+        ];
+
+        return new Response(204, $headers);
+    }
+
+    private function attachCorsHeaders(ResponseInterface $response, ServerRequestInterface $request): ResponseInterface
+    {
+        if (!$this->corsEnabled) {
+            return $response;
+        }
+
+        $origin = $request->getHeaderLine('Origin');
+        $allowOrigin = is_string($this->corsOptions['origin'] ?? null)
+            ? $this->corsOptions['origin']
+            : ($origin !== '' ? $origin : '*');
+
+        return $response
+            ->withHeader('Access-Control-Allow-Origin', $allowOrigin)
+            ->withHeader('Access-Control-Allow-Credentials', 'true')
+            ->withHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            ->withHeader('Access-Control-Expose-Headers', '*');
+    }
 }
+
