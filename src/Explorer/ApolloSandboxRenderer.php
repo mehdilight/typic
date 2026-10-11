@@ -17,6 +17,8 @@ class ApolloSandboxRenderer
      *     initialVariables?: array<string, mixed>,
      *     initialHeaders?: array<string, string>,
      *     theme?: 'dark'|'light',
+     *     subscriptionEndpoint?: string,
+     *     initialSubscriptionEndpoint?: string,
      * } $options
      */
     public function render(string $endpoint = '/graphql', array $options = []): string
@@ -40,6 +42,12 @@ class ApolloSandboxRenderer
         $initialStateJson = !empty($initialState)
             ? json_encode($initialState, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
             : 'null';
+
+        $subEndpoint = isset($options['subscriptionEndpoint'])
+            ? json_encode((string) $options['subscriptionEndpoint'], JSON_UNESCAPED_SLASHES)
+            : (isset($options['initialSubscriptionEndpoint'])
+                ? json_encode((string) $options['initialSubscriptionEndpoint'], JSON_UNESCAPED_SLASHES)
+                : 'null');
 
         $theme = isset($options['theme']) && $options['theme'] === 'light' ? "'light'" : "'dark'";
 
@@ -93,6 +101,11 @@ class ApolloSandboxRenderer
             var initialState = {$initialStateJson};
             if (initialState) {
                 config.initialState = initialState;
+            }
+
+            var subEndpoint = {$subEndpoint};
+            if (subEndpoint) {
+                config.initialSubscriptionEndpoint = subEndpoint;
             }
 
             new window.EmbeddedSandbox(config);

@@ -16,6 +16,8 @@ use Psr\Http\Server\RequestHandlerInterface;
 use Throwable;
 use Typic\Context;
 use Typic\Explorer\ApolloSandboxRenderer;
+use Typic\Subscription\PubSub\PubSubInterface;
+use Typic\Subscription\SubscriptionServer;
 
 class TypicServer implements RequestHandlerInterface
 {
@@ -34,6 +36,7 @@ class TypicServer implements RequestHandlerInterface
         private array $options = [],
         private bool $corsEnabled = true,
         private array $corsOptions = [],
+        private ?SubscriptionServer $subscriptionServer = null,
     ) {
         $this->sandbox = new ApolloSandboxRenderer();
     }
@@ -57,6 +60,16 @@ class TypicServer implements RequestHandlerInterface
     public function getCorsOptions(): array
     {
         return $this->corsOptions;
+    }
+
+    public function getSubscriptionServer(): ?SubscriptionServer
+    {
+        return $this->subscriptionServer;
+    }
+
+    public function getPubSub(): ?PubSubInterface
+    {
+        return $this->subscriptionServer?->getPubSub();
     }
 
     /**

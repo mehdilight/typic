@@ -7,6 +7,10 @@ namespace Typic\Server;
 use Psr\Container\ContainerInterface;
 use Typic\Scanner\DirectoryScanner;
 use Typic\Schema\SchemaCompiler;
+use Typic\Subscription\Driver\WebSocketServerInterface;
+use Typic\Subscription\PubSub\PubSubInterface;
+use Typic\Subscription\SubscriptionRegistry;
+use Typic\Subscription\SubscriptionServer;
 
 class TypicBuilder
 {
@@ -34,6 +38,10 @@ class TypicBuilder
     private bool $corsEnabled = true;
     /** @var array<string, mixed> */
     private array $corsOptions = [];
+    private bool $subscriptionsEnabled = false;
+    private ?WebSocketServerInterface $subscriptionDriver = null;
+    private ?PubSubInterface $pubSub = null;
+    private ?string $subscriptionEndpoint = null;
 
     /**
      * @var array<string, mixed>
@@ -157,6 +165,26 @@ class TypicBuilder
     }
 
     /**
+     * Enable GraphQL real-time subscriptions with a pluggable WebSocket driver and Pub/Sub backplane.
+     *
+     * @param WebSocketServerInterface|null $driver Defaults to WorkermanDriver(port: 8080)
+     * @param PubSubInterface|null $pubSub Defaults to InMemoryPubSub
+     * @param string|null $endpoint WebSocket endpoint URL (e.g. 'ws://localhost:8080')
+     * @return $this
+     */
+    public function withSubscriptions(
+        ?WebSocketServerInterface $driver = null,
+        ?PubSubInterface $pubSub = null,
+        ?string $endpoint = null,
+    ): self {
+        $this->subscriptionsEnabled = true;
+        $this->subscriptionDriver = $driver;
+        $this->pubSub = $pubSub;
+        $this->subscriptionEndpoint = $endpoint;
+        return $this;
+    }
+
+    /**
      * Build the configured TypicServer instance.
      */
     public function build(): TypicServer
@@ -191,6 +219,25 @@ class TypicBuilder
             $options['sandbox'] = $this->sandboxOptions;
         }
 
+        $subscriptionServer = null;
+        if ($this->subscriptionsEnabled) {
+            $registry = SubscriptionRegistry::fromResolvers($resolvers);
+            $subscriptionServer = new SubscriptionServer(
+                schema: $schema,
+                registry: $registry,
+                driver: $this->subscriptionDriver,
+                pubSub: $this->pubSub,
+                container: $this->container,
+            );
+
+            $subEndpoint = $this->subscriptionEndpoint
+                ?? ('ws://localhost:' . $subscriptionServer->getDriver()->getPort());
+            $options['subscriptionEndpoint'] ??= $subEndpoint;
+            if (isset($options['sandbox']) && is_array($options['sandbox'])) {
+                $options['sandbox']['subscriptionEndpoint'] ??= $subEndpoint;
+            }
+        }
+
         return new TypicServer(
             schema: $schema,
             container: $this->container,
@@ -200,6 +247,7 @@ class TypicBuilder
             options: $options,
             corsEnabled: $this->corsEnabled,
             corsOptions: $this->corsOptions,
+            subscriptionServer: $subscriptionServer,
         );
     }
 }

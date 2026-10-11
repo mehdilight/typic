@@ -19,6 +19,7 @@ class Subscription
         public ?string $deprecationReason = null,
         public ?string $arrayOf = null,
         public ?bool $nullable = null,
+        public ?string $topic = null,
     ) {
     }
 }

@@ -15,6 +15,7 @@ use Typic\Attribute\Context as ContextAttr;
 use Typic\Attribute\Info as InfoAttr;
 use Typic\Attribute\Inject;
 use Typic\Attribute\InputType;
+use Typic\Attribute\Payload as PayloadAttr;
 use Typic\Context;
 use Typic\DataLoader\DataLoader;
 
@@ -75,7 +76,14 @@ class ArgumentHydrator
             return $info;
         }
 
-        // 3. Explicit container injection #[Inject]
+        // 3. Subscription payload injection
+        if (!empty($param->getAttributes(PayloadAttr::class)) ||
+            $param->getName() === 'payload' ||
+            $param->getName() === 'event') {
+            return $source;
+        }
+
+        // 4. Explicit container injection #[Inject]
         $injectAttrs = $param->getAttributes(Inject::class);
         if (!empty($injectAttrs)) {
             /** @var Inject $inject */

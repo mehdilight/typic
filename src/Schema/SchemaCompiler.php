@@ -29,6 +29,7 @@ use Typic\Attribute\ID;
 use Typic\Attribute\InputType as InputTypeAttr;
 use Typic\Attribute\Mutation as MutationAttr;
 use Typic\Attribute\ObjectType as ObjectTypeAttr;
+use Typic\Attribute\Payload as PayloadAttr;
 use Typic\Attribute\Query as QueryAttr;
 use Typic\Attribute\ResolveField as ResolveFieldAttr;
 use Typic\Attribute\Subscription as SubscriptionAttr;
@@ -186,7 +187,11 @@ class SchemaCompiler
                             $context,
                             $info
                         );
-                        return $method->invokeArgs($instance, $resolvedArgs);
+                        $result = $method->invokeArgs($instance, $resolvedArgs);
+                        if ($result === true && $source !== null) {
+                            return $source;
+                        }
+                        return $result;
                     },
                 ];
             }
@@ -491,7 +496,10 @@ class SchemaCompiler
 
             if (!empty($param->getAttributes('Typic\Attribute\Context')) ||
                 !empty($param->getAttributes('Typic\Attribute\Info')) ||
-                !empty($param->getAttributes('Typic\Attribute\Inject'))) {
+                !empty($param->getAttributes('Typic\Attribute\Inject')) ||
+                !empty($param->getAttributes(PayloadAttr::class)) ||
+                $param->getName() === 'payload' ||
+                $param->getName() === 'event') {
                 continue;
             }
 
