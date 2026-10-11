@@ -50,8 +50,8 @@ class ExplorerTest extends TestCase
         $this->assertStringContainsString('My API GraphiQL', $html);
         $this->assertStringContainsString('<div id="graphiql">', $html);
         $this->assertStringContainsString('graphiql.min.js', $html);
-        $this->assertStringContainsString('graphql-ws.min.js', $html);
-        $this->assertStringContainsString('createClient', $html);
+        $this->assertStringContainsString('createFetcher', $html);
+        $this->assertStringContainsString('subscriptionUrl', $html);
         $this->assertStringContainsString('ws://localhost:8080', $html);
         $this->assertStringContainsString('query Ping { ping }', $html);
         // Ensure no iframe is used

@@ -96,44 +96,20 @@ class GraphiQLRenderer implements ExplorerInterface
             }
 
             var subEndpoint = {$subEndpointJson};
-            var wsClient = null;
+            var fetcherOptions = {
+                url: endpoint
+            };
 
-            if (subEndpoint && window.graphqlWs) {
+            if (subEndpoint) {
                 var wsUrl = subEndpoint;
                 if (wsUrl.startsWith('/')) {
                     var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                     wsUrl = wsProto + '//' + window.location.host + wsUrl;
                 }
-                wsClient = window.graphqlWs.createClient({
-                    url: wsUrl,
-                });
+                fetcherOptions.subscriptionUrl = wsUrl;
             }
 
-            function fetcher(graphQLParams, opts) {
-                var queryStr = (graphQLParams.query || '').trim();
-                var isSubscription = queryStr.startsWith('subscription');
-
-                if (isSubscription && wsClient) {
-                    return {
-                        subscribe: function(observer) {
-                            return wsClient.subscribe(graphQLParams, observer);
-                        }
-                    };
-                }
-
-                var headers = Object.assign({
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                }, (opts && opts.headers) || {});
-
-                return fetch(endpoint, {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify(graphQLParams),
-                }).then(function(response) {
-                    return response.json();
-                });
-            }
+            var fetcher = GraphiQL.createFetcher(fetcherOptions);
 
             var defaultQuery = {$defaultQueryJson};
             var defaultVariables = {$initialVariablesJson};
