@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Typic\Explorer;
 
-class ApolloSandboxRenderer
+class ApolloSandboxRenderer implements ExplorerInterface
 {
     public const CDN_URL = 'https://embeddable-sandbox.cdn.apollographql.com/_latest/embeddable-sandbox.umd.production.min.js';
 

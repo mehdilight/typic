@@ -5,6 +5,11 @@ declare(strict_types=1);
 namespace Typic\Server;
 
 use Psr\Container\ContainerInterface;
+use Typic\Explorer\AltairRenderer;
+use Typic\Explorer\ApolloSandboxRenderer;
+use Typic\Explorer\ExplorerInterface;
+use Typic\Explorer\ExplorerType;
+use Typic\Explorer\GraphiQLRenderer;
 use Typic\Scanner\DirectoryScanner;
 use Typic\Schema\SchemaCompiler;
 use Typic\Subscription\Driver\WebSocketServerInterface;
@@ -34,6 +39,7 @@ class TypicBuilder
     private string $sandboxEndpoint = '/graphql';
     /** @var array<string, mixed> */
     private array $sandboxOptions = [];
+    private ?ExplorerInterface $explorer = null;
     private bool $debug = false;
     private bool $corsEnabled = true;
     /** @var array<string, mixed> */
@@ -121,23 +127,85 @@ class TypicBuilder
      * @param array<string, mixed> $options
      * @return $this
      */
-    public function withSandbox(bool $enabled = true, string $endpoint = '/graphql', array $options = []): self
-    {
-        $this->sandboxEnabled = $enabled;
+    /**
+     * Configure GraphQL explorer (GraphiQL, Altair, or Apollo Sandbox).
+     *
+     * @param ExplorerInterface|ExplorerType|'graphiql'|'altair'|'apollo'|'sandbox' $explorer
+     * @param array<string, mixed> $options
+     * @return $this
+     */
+    public function withExplorer(
+        ExplorerInterface|ExplorerType|string $explorer,
+        string $endpoint = '/graphql',
+        array $options = []
+    ): self {
+        $this->sandboxEnabled = true;
         $this->sandboxEndpoint = $endpoint;
         $this->sandboxOptions = $options;
+
+        if ($explorer instanceof ExplorerInterface) {
+            $this->explorer = $explorer;
+        } elseif ($explorer instanceof ExplorerType) {
+            $this->explorer = match ($explorer) {
+                ExplorerType::GraphiQL => new GraphiQLRenderer(),
+                ExplorerType::Altair => new AltairRenderer(),
+                ExplorerType::Apollo, ExplorerType::Sandbox => new ApolloSandboxRenderer(),
+            };
+        } else {
+            $this->explorer = match (strtolower($explorer)) {
+                'graphiql' => new GraphiQLRenderer(),
+                'altair' => new AltairRenderer(),
+                'apollo', 'sandbox' => new ApolloSandboxRenderer(),
+                default => throw new \InvalidArgumentException("Unknown explorer type '{$explorer}'. Available: graphiql, altair, apollo, sandbox."),
+            };
+        }
+
         return $this;
     }
 
     /**
-     * Alias for withSandbox.
+     * Enable GraphiQL IDE (native DOM, zero iframes).
      *
      * @param array<string, mixed> $options
      * @return $this
      */
     public function withGraphiQL(bool $enabled = true, string $endpoint = '/graphql', array $options = []): self
     {
-        return $this->withSandbox($enabled, $endpoint, $options);
+        if (!$enabled) {
+            $this->sandboxEnabled = false;
+            return $this;
+        }
+        return $this->withExplorer(ExplorerType::GraphiQL, $endpoint, $options);
+    }
+
+    /**
+     * Enable Altair GraphQL Client (native DOM, zero iframes).
+     *
+     * @param array<string, mixed> $options
+     * @return $this
+     */
+    public function withAltair(bool $enabled = true, string $endpoint = '/graphql', array $options = []): self
+    {
+        if (!$enabled) {
+            $this->sandboxEnabled = false;
+            return $this;
+        }
+        return $this->withExplorer(ExplorerType::Altair, $endpoint, $options);
+    }
+
+    /**
+     * Enable Apollo Sandbox explorer.
+     *
+     * @param array<string, mixed> $options
+     * @return $this
+     */
+    public function withSandbox(bool $enabled = true, string $endpoint = '/graphql', array $options = []): self
+    {
+        if (!$enabled) {
+            $this->sandboxEnabled = false;
+            return $this;
+        }
+        return $this->withExplorer(ExplorerType::Apollo, $endpoint, $options);
     }
 
     /**
@@ -233,7 +301,8 @@ class TypicBuilder
             $subEndpoint = $this->subscriptionEndpoint
                 ?? ('ws://localhost:' . $subscriptionServer->getDriver()->getPort());
             $options['subscriptionEndpoint'] ??= $subEndpoint;
-            if (isset($options['sandbox']) && is_array($options['sandbox'])) {
+            $options['sandbox'] ??= [];
+            if (is_array($options['sandbox'])) {
                 $options['sandbox']['subscriptionEndpoint'] ??= $subEndpoint;
             }
         }
@@ -249,6 +318,7 @@ class TypicBuilder
             corsOptions: $this->corsOptions,
             subscriptionServer: $subscriptionServer,
             pubSub: $this->pubSub,
+            explorer: $this->explorer,
         );
     }
 }

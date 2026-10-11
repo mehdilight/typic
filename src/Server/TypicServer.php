@@ -16,12 +16,13 @@ use Psr\Http\Server\RequestHandlerInterface;
 use Throwable;
 use Typic\Context;
 use Typic\Explorer\ApolloSandboxRenderer;
+use Typic\Explorer\ExplorerInterface;
 use Typic\Subscription\PubSub\PubSubInterface;
 use Typic\Subscription\SubscriptionServer;
 
 class TypicServer implements RequestHandlerInterface
 {
-    private ApolloSandboxRenderer $sandbox;
+    private ExplorerInterface $explorer;
 
     /**
      * @param array<string, mixed> $options
@@ -38,9 +39,10 @@ class TypicServer implements RequestHandlerInterface
         private array $corsOptions = [],
         private ?SubscriptionServer $subscriptionServer = null,
         private ?PubSubInterface $pubSub = null,
+        ?ExplorerInterface $explorer = null,
     ) {
         $this->pubSub ??= $this->subscriptionServer?->getPubSub();
-        $this->sandbox = new ApolloSandboxRenderer();
+        $this->explorer = $explorer ?? new ApolloSandboxRenderer();
     }
 
     public function getSchema(): Schema
@@ -71,7 +73,12 @@ class TypicServer implements RequestHandlerInterface
 
     public function getPubSub(): ?PubSubInterface
     {
-        return $this->subscriptionServer?->getPubSub();
+        return $this->pubSub ?? $this->subscriptionServer?->getPubSub();
+    }
+
+    public function getExplorer(): ExplorerInterface
+    {
+        return $this->explorer;
     }
 
     /**
@@ -86,7 +93,7 @@ class TypicServer implements RequestHandlerInterface
             return $this->handleCorsPreflight($request);
         }
 
-        // Check if browser is requesting Apollo Sandbox HTML
+        // Check if browser is requesting GraphQL explorer HTML
         if ($method === 'GET') {
             $accept = $request->getHeaderLine('Accept');
             $queryParams = $request->getQueryParams();
@@ -94,7 +101,7 @@ class TypicServer implements RequestHandlerInterface
             if ($this->sandboxEnabled && !isset($queryParams['query']) && (str_contains($accept, 'text/html') || $accept === '*/*' || $accept === '')) {
                 /** @var array<string, mixed> $sandboxOpts */
                 $sandboxOpts = $this->options['sandbox'] ?? $this->options;
-                $html = $this->sandbox->render($this->sandboxEndpoint, $sandboxOpts);
+                $html = $this->explorer->render($this->sandboxEndpoint, $sandboxOpts);
                 return $this->attachCorsHeaders(
                     new Response(200, ['Content-Type' => 'text/html; charset=UTF-8'], $html),
                     $request
