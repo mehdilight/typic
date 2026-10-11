@@ -273,6 +273,29 @@ $server->getSubscriptionServer()->start();
 
 ---
 
+### 7. Switchable GraphQL Explorers
+
+Typic supports three embedded developer explorers:
+
+```php
+// 1. GraphiQL (Native DOM, zero iframes, direct WebSockets)
+$server = Typic::builder()
+    ->withGraphiQL()
+    ->build();
+
+// 2. Altair GraphQL Client (Native DOM, multi-tab, zero iframes)
+$server = Typic::builder()
+    ->withAltair()
+    ->build();
+
+// 3. Apollo Sandbox (Official Apollo Studio embed)
+$server = Typic::builder()
+    ->withSandbox()
+    ->build();
+```
+
+---
+
 ## Testing & Quality
 
 Typic is tested with PHPUnit and verified with PHPStan at **Level 8**:
