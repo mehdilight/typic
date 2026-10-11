@@ -86,6 +86,11 @@ class SubscriptionServer
         return $this->handler;
     }
 
+    public function getProtocolHandler(): GraphqlWsHandler
+    {
+        return $this->handler;
+    }
+
     public function getRegistry(): SubscriptionRegistry
     {
         return $this->registry;
