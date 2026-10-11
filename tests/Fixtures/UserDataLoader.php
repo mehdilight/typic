@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace Typic\Tests\Fixtures;
 
+use Typic\Attribute\KeyBy;
 use Typic\DataLoader\DataLoader;
 
 /**
  * @extends DataLoader<int, User>
  */
+#[KeyBy('id')]
 class UserDataLoader extends DataLoader
 {
-    protected mixed $keyBy = 'id';
-
     public int $batchCallCount = 0;
 
     /**

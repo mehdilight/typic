@@ -118,7 +118,12 @@ class DataLoader
      */
     protected function keyBy(): mixed
     {
-        return $this->keyBy;
+        if ($this->keyBy !== null) {
+            return $this->keyBy;
+        }
+
+        $attrs = (new \ReflectionClass($this))->getAttributes(\Typic\Attribute\KeyBy::class);
+        return !empty($attrs) ? $attrs[0]->newInstance()->key : null;
     }
 
     /**
@@ -128,7 +133,12 @@ class DataLoader
      */
     protected function groupBy(): mixed
     {
-        return $this->groupBy;
+        if ($this->groupBy !== null) {
+            return $this->groupBy;
+        }
+
+        $attrs = (new \ReflectionClass($this))->getAttributes(\Typic\Attribute\GroupBy::class);
+        return !empty($attrs) ? $attrs[0]->newInstance()->key : null;
     }
 
     /**

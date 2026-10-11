@@ -21,6 +21,8 @@ use ReflectionNamedType;
 use ReflectionParameter;
 use ReflectionProperty;
 use Typic\Attribute\Arg;
+use Typic\Attribute\Deprecated;
+use Typic\Attribute\Description;
 use Typic\Attribute\EnumType as EnumTypeAttr;
 use Typic\Attribute\Field as FieldAttr;
 use Typic\Attribute\ID;
@@ -172,8 +174,8 @@ class SchemaCompiler
                 $fields[$fieldName] = [
                     'name' => $fieldName,
                     'type' => $fieldType,
-                    'description' => $attr->description,
-                    'deprecationReason' => $attr->deprecationReason,
+                    'description' => $this->extractDescription($method, $attr->description),
+                    'deprecationReason' => $this->extractDeprecationReason($method, $attr->deprecationReason),
                     'args' => $argsConfig,
                     'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($resolverClass, $method) {
                         $instance = $this->resolveResolverInstance($resolverClass);
@@ -230,7 +232,7 @@ class SchemaCompiler
             ? $attrs[0]->newInstance()->name
             : $ref->getShortName();
 
-        $description = !empty($attrs) ? $attrs[0]->newInstance()->description : null;
+        $description = $this->extractDescription($ref, !empty($attrs) ? $attrs[0]->newInstance()->description : null);
 
         $values = [];
         foreach ($ref->getConstants() as $caseName => $case) {
@@ -261,7 +263,7 @@ class SchemaCompiler
             ? $attrs[0]->newInstance()->name
             : $ref->getShortName();
 
-        $description = !empty($attrs) ? $attrs[0]->newInstance()->description : null;
+        $description = $this->extractDescription($ref, !empty($attrs) ? $attrs[0]->newInstance()->description : null);
 
         $inputObjectType = new InputObjectType([
             'name' => $name,
@@ -300,7 +302,7 @@ class SchemaCompiler
                 $fields[$pName] = [
                     'name' => $pName,
                     'type' => $fieldType,
-                    'description' => $fieldAttr?->description,
+                    'description' => $this->extractDescription($param, $fieldAttr?->description),
                     'defaultValue' => $param->isDefaultValueAvailable() ? $param->getDefaultValue() : null,
                 ];
             }
@@ -324,7 +326,7 @@ class SchemaCompiler
             $fields[$pName] = [
                 'name' => $pName,
                 'type' => $fieldType,
-                'description' => $fieldAttr?->description,
+                'description' => $this->extractDescription($prop, $fieldAttr?->description),
                 'defaultValue' => $prop->hasDefaultValue() ? $prop->getDefaultValue() : null,
             ];
         }
@@ -342,7 +344,7 @@ class SchemaCompiler
             ? $attrs[0]->newInstance()->name
             : $ref->getShortName();
 
-        $description = !empty($attrs) ? $attrs[0]->newInstance()->description : null;
+        $description = $this->extractDescription($ref, !empty($attrs) ? $attrs[0]->newInstance()->description : null);
 
         $objectType = new ObjectType([
             'name' => $name,
@@ -378,8 +380,8 @@ class SchemaCompiler
             $fields[$fieldName] = [
                 'name' => $fieldName,
                 'type' => $type,
-                'description' => $fieldAttr?->description,
-                'deprecationReason' => $fieldAttr?->deprecationReason,
+                'description' => $this->extractDescription($prop, $fieldAttr?->description),
+                'deprecationReason' => $this->extractDeprecationReason($prop, $fieldAttr?->deprecationReason),
                 'resolve' => static function ($source) use ($propName) {
                     if (is_object($source) && isset($source->{$propName})) {
                         return $source->{$propName};
@@ -411,8 +413,8 @@ class SchemaCompiler
             $fields[$fieldName] = [
                 'name' => $fieldName,
                 'type' => $type,
-                'description' => $fieldAttr->description,
-                'deprecationReason' => $fieldAttr->deprecationReason,
+                'description' => $this->extractDescription($method, $fieldAttr->description),
+                'deprecationReason' => $this->extractDeprecationReason($method, $fieldAttr->deprecationReason),
                 'args' => $argsConfig,
                 'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($method) {
                     if (!is_object($source)) {
@@ -437,8 +439,8 @@ class SchemaCompiler
                 $fields[$fieldName] = [
                     'name' => $fieldName,
                     'type' => $type,
-                    'description' => $extAttr->description,
-                    'deprecationReason' => $extAttr->deprecationReason,
+                    'description' => $this->extractDescription($extMethod, $extAttr->description),
+                    'deprecationReason' => $this->extractDeprecationReason($extMethod, $extAttr->deprecationReason),
                     'args' => $argsConfig,
                     'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($extResolverClass, $extMethod, $className) {
                         $instance = $this->resolveResolverInstance($extResolverClass);
@@ -500,7 +502,7 @@ class SchemaCompiler
             $config = [
                 'name' => $argName,
                 'type' => $argType,
-                'description' => $argAttr?->description,
+                'description' => $this->extractDescription($param, $argAttr?->description),
             ];
 
             if ($param->isDefaultValueAvailable()) {
@@ -705,29 +707,31 @@ class SchemaCompiler
             $name = $type->getName();
 
             // Paginator without explicit arrayOf
-            if ($name === Paginator::class) {
-                // Check docblock @return Paginator<Post>
-                $itemClass = $this->parseGenericFromDocblock($method);
-                if ($itemClass !== null) {
-                    $paginatorType = $this->resolvePaginatorType($itemClass);
-                    return $nullable ? $paginatorType : $this->nonNull($paginatorType);
-                }
+            if ($name === Paginator::class || is_subclass_of($name, Paginator::class)) {
+                throw new InvalidArgumentException(sprintf(
+                    "Method '%s::%s' returns '%s', which requires explicit 'arrayOf' on the #[Query], #[Field], or #[ResolveField] attribute.",
+                    $method->getDeclaringClass()->getName(),
+                    $method->getName(),
+                    $name
+                ));
             }
 
-            if ($name === Connection::class) {
-                $itemClass = $this->parseGenericFromDocblock($method);
-                if ($itemClass !== null) {
-                    $connectionType = $this->resolveConnectionType($itemClass);
-                    return $nullable ? $connectionType : $this->nonNull($connectionType);
-                }
+            if ($name === Connection::class || is_subclass_of($name, Connection::class)) {
+                throw new InvalidArgumentException(sprintf(
+                    "Method '%s::%s' returns '%s', which requires explicit 'arrayOf' on the #[Query], #[Field], or #[ResolveField] attribute.",
+                    $method->getDeclaringClass()->getName(),
+                    $method->getName(),
+                    $name
+                ));
             }
 
-            if ($name === 'GraphQL\Deferred' || $name === 'GraphQL\Executor\Promise\Promise') {
-                $docType = $this->parseReturnTypeFromDocblock($method);
-                if ($docType !== null) {
-                    $base = $this->resolveTypeByNameOrClass($docType);
-                    return $nullable ? $base : $this->nonNull($base);
-                }
+            if ($name === 'GraphQL\Deferred' || $name === 'GraphQL\Executor\Promise\Promise' || is_subclass_of($name, 'GraphQL\Deferred') || is_subclass_of($name, 'GraphQL\Executor\Promise\Promise')) {
+                throw new InvalidArgumentException(sprintf(
+                    "Method '%s::%s' returns '%s', which requires explicit 'type' or 'arrayOf' on the #[Query], #[Field], or #[ResolveField] attribute.",
+                    $method->getDeclaringClass()->getName(),
+                    $method->getName(),
+                    $name
+                ));
             }
 
             $base = match ($name) {
@@ -884,67 +888,46 @@ class SchemaCompiler
         }
     }
 
-    private function parseGenericFromDocblock(ReflectionMethod $method): ?string
-    {
-        $doc = $method->getDocComment();
-        if ($doc === false) {
-            return null;
+    /**
+     * @param ReflectionClass<*>|ReflectionMethod|ReflectionProperty|ReflectionParameter $reflector
+     */
+    private function extractDescription(
+        ReflectionClass|ReflectionMethod|ReflectionProperty|ReflectionParameter $reflector,
+        ?string $explicitDescription = null
+    ): ?string {
+        if ($explicitDescription !== null && $explicitDescription !== '') {
+            return $explicitDescription;
         }
 
-        if (preg_match('/@return\s+(?:LengthAwarePaginator|Paginator|Connection)<([a-zA-Z0-9_\\\\]+)>/', $doc, $matches)) {
-            $class = $matches[1];
-            if (class_exists($class)) {
-                return $class;
-            }
-            // Check in method namespace
-            $ns = $method->getDeclaringClass()->getNamespaceName();
-            $fqcn = $ns . '\\' . $class;
-            if (class_exists($fqcn)) {
-                return $fqcn;
-            }
+        $descAttrs = $reflector->getAttributes(Description::class);
+        if (!empty($descAttrs)) {
+            return $descAttrs[0]->newInstance()->text;
         }
 
         return null;
     }
 
-    private function parseReturnTypeFromDocblock(ReflectionMethod $method): ?string
-    {
-        $doc = $method->getDocComment();
-        if ($doc === false) {
-            return null;
+    private function extractDeprecationReason(
+        ReflectionMethod|ReflectionProperty $reflector,
+        ?string $explicitReason = null
+    ): ?string {
+        if ($explicitReason !== null && $explicitReason !== '') {
+            return $explicitReason;
         }
 
-        if (preg_match('/@return\s+(?:Deferred|Promise)<([a-zA-Z0-9_\\\\]+)>/', $doc, $matches)) {
-            return $this->resolveClassFromDocblock($matches[1], $method);
+        $depAttrs = $reflector->getAttributes(Deprecated::class);
+        if (!empty($depAttrs)) {
+            return $depAttrs[0]->newInstance()->reason;
         }
 
-        if (preg_match('/@return\s+([^\s]+)/', $doc, $matches)) {
-            $parts = explode('|', $matches[1]);
-            foreach ($parts as $part) {
-                $part = trim($part);
-                if ($part === 'Deferred' || $part === 'Promise' || $part === 'null' || str_contains($part, 'Deferred') || str_contains($part, 'Promise')) {
-                    continue;
-                }
-                return $this->resolveClassFromDocblock($part, $method);
+        if (class_exists(\Deprecated::class)) {
+            $nativeAttrs = $reflector->getAttributes(\Deprecated::class);
+            if (!empty($nativeAttrs)) {
+                return $nativeAttrs[0]->newInstance()->message ?? 'No longer supported';
             }
         }
 
         return null;
-    }
-
-    private function resolveClassFromDocblock(string $className, ReflectionMethod $method): string
-    {
-        if (class_exists($className) || interface_exists($className) || enum_exists($className) || $this->typeRegistry->has($className)) {
-            return $className;
-        }
-
-        $ns = $method->getDeclaringClass()->getNamespaceName();
-        $fqcn = $ns . '\\' . $className;
-        if (class_exists($fqcn) || interface_exists($fqcn) || enum_exists($fqcn)) {
-            return $fqcn;
-        }
-
-        return $className;
     }
 
     /**

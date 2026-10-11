@@ -245,4 +245,39 @@ class TypicTest extends TestCase
         $this->assertArrayNotHasKey('errors', $result);
         $this->assertCount(3, $result['data']['posts']);
     }
+
+    public function test_attributes_description_and_deprecation_introspection(): void
+    {
+        $server = Typic::builder()
+            ->scanDirectories([__DIR__ . '/Fixtures'])
+            ->build();
+
+        $result = $server->execute('{
+            __type(name: "Post") {
+                name
+                description
+                fields(includeDeprecated: true) {
+                    name
+                    description
+                    isDeprecated
+                    deprecationReason
+                }
+            }
+        }');
+
+        $this->assertArrayNotHasKey('errors', $result);
+        $fields = $result['data']['__type']['fields'];
+        $snippetField = null;
+        foreach ($fields as $field) {
+            if ($field['name'] === 'snippet') {
+                $snippetField = $field;
+                break;
+            }
+        }
+
+        $this->assertNotNull($snippetField);
+        $this->assertSame('A short preview of the post content', $snippetField['description']);
+        $this->assertTrue($snippetField['isDeprecated']);
+        $this->assertSame('Use excerpt instead', $snippetField['deprecationReason']);
+    }
 }

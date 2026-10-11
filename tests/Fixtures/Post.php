@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Typic\Tests\Fixtures;
 
+use Typic\Attribute\Deprecated;
+use Typic\Attribute\Description;
 use Typic\Attribute\Field;
 use Typic\Attribute\ID;
 use Typic\Attribute\ObjectType;
@@ -41,6 +43,8 @@ class Post
     }
 
     #[Field]
+    #[Description('A short preview of the post content')]
+    #[Deprecated('Use excerpt instead')]
     public function snippet(): string
     {
         return mb_substr($this->content ?? '', 0, 10) . '...';
