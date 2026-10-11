@@ -25,6 +25,7 @@ class Typic
      *     types?: array<class-string>,
      *     scanDirectories?: list<string>,
      *     container?: \Psr\Container\ContainerInterface|null,
+     *     sandbox?: bool,
      *     graphiql?: bool,
      *     debug?: bool,
      * } $options
@@ -49,8 +50,10 @@ class Typic
             $builder->withContainer($options['container']);
         }
 
-        if (isset($options['graphiql'])) {
-            $builder->withGraphiQL((bool) $options['graphiql']);
+        if (isset($options['sandbox'])) {
+            $builder->withSandbox((bool) $options['sandbox']);
+        } elseif (isset($options['graphiql'])) {
+            $builder->withSandbox((bool) $options['graphiql']);
         }
 
         if (isset($options['debug'])) {

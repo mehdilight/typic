@@ -218,14 +218,15 @@ class TypicTest extends TestCase
         $body = json_decode((string) $response->getBody(), true);
         $this->assertCount(3, $body['data']['posts']);
 
-        // 2. GET GraphiQL HTML
+        // 2. GET Apollo Sandbox HTML
         $getHtmlRequest = new ServerRequest('GET', '/graphql', [
             'Accept' => 'text/html',
         ]);
         $htmlResponse = $server->handle($getHtmlRequest);
         $this->assertSame(200, $htmlResponse->getStatusCode());
         $this->assertStringContainsString('text/html', $htmlResponse->getHeaderLine('Content-Type'));
-        $this->assertStringContainsString('Typic GraphiQL Explorer', (string) $htmlResponse->getBody());
+        $this->assertStringContainsString('Typic Apollo Sandbox', (string) $htmlResponse->getBody());
+        $this->assertStringContainsString('embeddable-sandbox.cdn.apollographql.com', (string) $htmlResponse->getBody());
     }
 
     public function test_directory_scanner_auto_discovery(): void

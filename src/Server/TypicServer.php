@@ -15,11 +15,11 @@ use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use Throwable;
 use Typic\Context;
-use Typic\GraphiQL\GraphiQLRenderer;
+use Typic\Explorer\ApolloSandboxRenderer;
 
 class TypicServer implements RequestHandlerInterface
 {
-    private GraphiQLRenderer $graphiql;
+    private ApolloSandboxRenderer $sandbox;
 
     /**
      * @param array<string, mixed> $options
@@ -27,12 +27,12 @@ class TypicServer implements RequestHandlerInterface
     public function __construct(
         private Schema $schema,
         private ?ContainerInterface $container = null,
-        private bool $graphiqlEnabled = true,
-        private string $graphiqlEndpoint = '/graphql',
+        private bool $sandboxEnabled = true,
+        private string $sandboxEndpoint = '/graphql',
         private bool $debug = false,
         private array $options = [],
     ) {
-        $this->graphiql = new GraphiQLRenderer();
+        $this->sandbox = new ApolloSandboxRenderer();
     }
 
     public function getSchema(): Schema
@@ -55,13 +55,15 @@ class TypicServer implements RequestHandlerInterface
     {
         $method = strtoupper($request->getMethod());
 
-        // Check if browser is requesting GraphiQL HTML
+        // Check if browser is requesting Apollo Sandbox HTML
         if ($method === 'GET') {
             $accept = $request->getHeaderLine('Accept');
             $queryParams = $request->getQueryParams();
 
-            if ($this->graphiqlEnabled && (!isset($queryParams['query']) || str_contains($accept, 'text/html'))) {
-                $html = $this->graphiql->render($this->graphiqlEndpoint);
+            if ($this->sandboxEnabled && (!isset($queryParams['query']) || str_contains($accept, 'text/html'))) {
+                /** @var array<string, mixed> $sandboxOpts */
+                $sandboxOpts = $this->options['sandbox'] ?? $this->options;
+                $html = $this->sandbox->render($this->sandboxEndpoint, $sandboxOpts);
                 return new Response(200, ['Content-Type' => 'text/html; charset=UTF-8'], $html);
             }
         }

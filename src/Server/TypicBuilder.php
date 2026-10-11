@@ -26,8 +26,10 @@ class TypicBuilder
     private array $scanDirectories = [];
 
     private ?ContainerInterface $container = null;
-    private bool $graphiqlEnabled = true;
-    private string $graphiqlEndpoint = '/graphql';
+    private bool $sandboxEnabled = true;
+    private string $sandboxEndpoint = '/graphql';
+    /** @var array<string, mixed> */
+    private array $sandboxOptions = [];
     private bool $debug = false;
 
     /**
@@ -103,15 +105,28 @@ class TypicBuilder
     }
 
     /**
-     * Enable or disable GraphiQL explorer.
+     * Enable or configure Apollo Sandbox explorer.
      *
+     * @param array<string, mixed> $options
      * @return $this
      */
-    public function withGraphiQL(bool $enabled = true, string $endpoint = '/graphql'): self
+    public function withSandbox(bool $enabled = true, string $endpoint = '/graphql', array $options = []): self
     {
-        $this->graphiqlEnabled = $enabled;
-        $this->graphiqlEndpoint = $endpoint;
+        $this->sandboxEnabled = $enabled;
+        $this->sandboxEndpoint = $endpoint;
+        $this->sandboxOptions = $options;
         return $this;
+    }
+
+    /**
+     * Alias for withSandbox.
+     *
+     * @param array<string, mixed> $options
+     * @return $this
+     */
+    public function withGraphiQL(bool $enabled = true, string $endpoint = '/graphql', array $options = []): self
+    {
+        return $this->withSandbox($enabled, $endpoint, $options);
     }
 
     /**
@@ -155,13 +170,18 @@ class TypicBuilder
 
         $schema = $compiler->compile();
 
+        $options = $this->options;
+        if (!empty($this->sandboxOptions)) {
+            $options['sandbox'] = $this->sandboxOptions;
+        }
+
         return new TypicServer(
             schema: $schema,
             container: $this->container,
-            graphiqlEnabled: $this->graphiqlEnabled,
-            graphiqlEndpoint: $this->graphiqlEndpoint,
+            sandboxEnabled: $this->sandboxEnabled,
+            sandboxEndpoint: $this->sandboxEndpoint,
             debug: $this->debug,
-            options: $this->options,
+            options: $options,
         );
     }
 }

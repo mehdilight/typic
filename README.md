@@ -18,7 +18,7 @@
 - **Built-in DataLoader**: Solve N+1 query problems effortlessly with first-class batch loading and lifecycle caching.
 - **First-Class Pagination**: Automatic schema generation for both offset-based (`Paginator`) and Relay cursor-based (`Connection`) pagination.
 - **PSR-7 & PSR-15 Standard Compliant**: Integrates with any modern PHP framework (Laravel, Symfony, Spiral, Slim, Mezzio) or standalone HTTP runtimes.
-- **Interactive GraphiQL Explorer**: Built-in developer IDE served automatically at `/graphql` for browser requests.
+- **Embedded Apollo Sandbox**: Industry-standard, visual query builder and developer explorer served automatically at `/graphql` for browser requests.
 - **Directory Scanner & Auto-Discovery**: Automatically scans your project directories and registers types, queries, mutations, and field resolvers.
 - **Strictly Typed & Refactoring Safe**: Fully compatible with PHPStan (Level 8) and IDE refactoring tools.
 
@@ -213,7 +213,7 @@ use Typic\Typic;
 $server = Typic::builder()
     ->scanDirectories([__DIR__ . '/GraphQL'])
     ->withContainer($container)
-    ->withGraphiQL(true)
+    ->withSandbox(true)
     ->build();
 
 // In any PSR-15 handler or controller:
