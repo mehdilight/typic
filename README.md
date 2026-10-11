@@ -11,9 +11,10 @@
 
 ---
 
-## ✨ Features
+## Features
 
 - **Zero SDL Boilerplate**: Define your schema using pure PHP classes and attributes. Types, fields, nullability, and arguments are inferred automatically.
+- **Real-Time Subscriptions**: Driver-based WebSocket subscription engine powered by Workerman, supporting standard graphql-ws protocol and interchangeable drivers.
 - **Nested Input DTO Hydration**: Type-hint `readonly` DTO classes in your mutations; Typic recursively hydrates nested GraphQL input objects into strongly-typed PHP objects.
 - **Built-in DataLoader**: Solve N+1 query problems effortlessly with first-class batch loading and lifecycle caching.
 - **First-Class Pagination**: Automatic schema generation for both offset-based (`Paginator`) and Relay cursor-based (`Connection`) pagination.
@@ -24,7 +25,7 @@
 
 ---
 
-## 🚀 Installation
+## Installation
 
 ```bash
 composer require typic/typic
@@ -32,7 +33,7 @@ composer require typic/typic
 
 ---
 
-## 📖 Quickstart Example
+## Quickstart Example
 
 ### 1. Define an Object Type
 
@@ -230,7 +231,49 @@ $result = $server->execute(
 
 ---
 
-## 🛠️ Testing & Quality
+### 6. Real-Time Subscriptions (Workerman)
+
+Typic features built-in WebSocket subscriptions using the standard `graphql-transport-ws` protocol:
+
+```php
+namespace App\GraphQL\Resolvers;
+
+use App\GraphQL\Types\Comment;
+use Typic\Attribute\ID;
+use Typic\Attribute\Payload;
+use Typic\Attribute\Subscription;
+
+class CommentSubscriptionResolver
+{
+    #[Subscription(name: 'commentAdded', type: Comment::class, topic: 'COMMENT_ADDED')]
+    public function commentAdded(#[ID] ?int $postId = null, #[Payload] ?Comment $payload = null): bool
+    {
+        return $postId === null || $payload?->postId === $postId;
+    }
+}
+```
+
+Run with Workerman:
+
+```php
+use Typic\Subscription\Driver\Workerman\WorkermanDriver;
+use Typic\Typic;
+
+$server = Typic::builder()
+    ->scanDirectories([__DIR__ . '/GraphQL'])
+    ->withSubscriptions(
+        driver: new WorkermanDriver(host: '0.0.0.0', port: 8080),
+        endpoint: 'ws://localhost:8080'
+    )
+    ->build();
+
+// Start the Workerman event loop
+$server->getSubscriptionServer()->start();
+```
+
+---
+
+## Testing & Quality
 
 Typic is tested with PHPUnit and verified with PHPStan at **Level 8**:
 
@@ -241,6 +284,7 @@ composer phpstan
 
 ---
 
-## 📄 License
+## License
 
 Typic is open-source software licensed under the [MIT license](LICENSE).
+
