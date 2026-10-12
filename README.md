@@ -54,15 +54,7 @@ During development, use the local checkout as the dependency source:
 php bin/typic init ../my-api --repository=.
 ```
 
-`--repository` accepts an existing local checkout or a Git repository URL. This is needed before the package is available through Packagist, unless your Composer configuration already supplies its source.
-
-Until the package is listed on Packagist, configure its Git repository first:
-
-```sh
-composer config repositories.typic vcs https://github.com/mehdilight/typic
-# For a global installation instead:
-composer global config repositories.typic vcs https://github.com/mehdilight/typic
-```
+`--repository` accepts an existing local checkout or a Git repository URL for development or custom sources. The published package is available on [Packagist](https://packagist.org/packages/phpmystic/typic), so normal installations need no repository configuration.
 
 For global installation:
 
