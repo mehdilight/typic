@@ -16,7 +16,7 @@
 - **Zero SDL Boilerplate**: Define your schema using pure PHP classes and attributes. Types, fields, nullability, and arguments are inferred automatically.
 - **Real-Time Subscriptions**: Driver-based WebSocket subscription engine powered by Workerman, supporting the standard graphql-ws protocol, interchangeable drivers, and Redis Pub/Sub for multi-process delivery.
 - **Nested Input DTO Hydration**: Type-hint `readonly` DTO classes in your mutations; Typic recursively hydrates nested GraphQL input objects into strongly-typed PHP objects.
-- **Built-in DataLoader**: Solve N+1 query problems effortlessly with first-class batch loading and lifecycle caching.
+- **Built-in DataLoader**: Write one `batch()` method and call `$loader->get($id)` in resolvers; Typic turns N lookups into one query.
 - **First-Class Pagination**: Automatic schema generation for both offset-based (`Paginator`) and Relay cursor-based (`Connection`) pagination.
 - **PSR-7 & PSR-15 Standard Compliant**: Integrates with any modern PHP framework (Laravel, Symfony, Spiral, Slim, Mezzio) or standalone HTTP runtimes.
 - **Embedded Apollo Sandbox**: Industry-standard, visual query builder and developer explorer served automatically at `/graphql` for browser requests.
@@ -166,43 +166,64 @@ class PostResolver
 
 ### 4. Resolve Relationships with DataLoader (Zero N+1)
 
+Resolving `author` for 100 posts one by one runs 100 queries. A DataLoader collects all 100 ids and runs one.
+
+**Step 1: write the loader.** `batch()` receives every requested key at once and returns the results keyed by those keys:
+
 ```php
 namespace App\GraphQL\DataLoaders;
 
+use App\GraphQL\Types\User;
 use Typic\DataLoader\DataLoader;
-use App\Models\User;
 
-class UserDataLoader extends DataLoader
+/** @extends DataLoader<int, User|null> */
+class UserLoader extends DataLoader
 {
-    protected mixed $keyBy = 'id';
-
-    protected function batch(array $keys): iterable
+    protected function batch(array $ids): iterable
     {
-        return User::whereIn('id', $keys)->get();
+        return $this->keyBy(User::findMany($ids), 'id');   // [id => User]
     }
 }
 ```
 
-Attach the relationship field resolver:
+**Step 2: use it in a resolver.** Take the loader as a parameter and call `get()`:
 
 ```php
-namespace App\GraphQL\Resolvers;
-
-use App\GraphQL\Types\Post;
-use App\GraphQL\Types\User;
-use App\GraphQL\DataLoaders\UserDataLoader;
-use GraphQL\Deferred;
-use Typic\Attribute\ResolveField;
-
-class PostFieldResolver
+#[ResolveField(target: Post::class)]
+public function author(Post $post, UserLoader $users): ?User
 {
-    #[ResolveField(target: Post::class, name: 'author', type: User::class)]
-    public function author(Post $post, UserDataLoader $loader): Deferred
-    {
-        return $loader->load($post->authorId);
-    }
+    return $users->get($post->authorId);
 }
 ```
+
+That's it. `get()` reads like a normal function call, but Typic pauses the resolver until every post on the page has asked for its author, then calls `batch()` once with all the ids. The field type comes from the return type, as usual.
+
+For one-to-many relations, build the result with `groupBy()`. Every requested key gets a list, so posts without comments get `[]`:
+
+```php
+/** @extends DataLoader<int, list<Comment>> */
+class CommentsByPostLoader extends DataLoader
+{
+    protected function batch(array $postIds): iterable
+    {
+        return $this->groupBy(Comment::wherePostIdIn($postIds), 'postId');   // [postId => list<Comment>]
+    }
+}
+
+/** @return list<Comment> */
+#[ResolveField(target: Post::class, arrayOf: Comment::class)]
+public function comments(Post $post, CommentsByPostLoader $comments): array
+{
+    return $comments->get($post->id);
+}
+```
+
+Good to know:
+- **Missing keys:** keys that `batch()` does not return resolve to `null`.
+- **One per request:** each request gets its own loader instance, and results are cached for that request (`clear($key)` after a mutation if needed).
+- **Mistakes are caught:** returning a plain list instead of a keyed array throws an error that names the fix.
+- **More helpers:** `getMany($keys)` loads several keys at once, and `prime($key, $value)` stores a value you already have.
+- **Outside a resolver parameter:** `load($key)` returns a `GraphQL\Deferred` instead, for code that receives the loader some other way.
 
 ---
 

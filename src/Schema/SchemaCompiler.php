@@ -33,6 +33,8 @@ use Typic\Attribute\Payload as PayloadAttr;
 use Typic\Attribute\Query as QueryAttr;
 use Typic\Attribute\ResolveField as ResolveFieldAttr;
 use Typic\Attribute\Subscription as SubscriptionAttr;
+use Typic\DataLoader\DataLoader;
+use Typic\DataLoader\FiberResolver;
 use Typic\Pagination\Connection;
 use Typic\Pagination\PageInfo;
 use Typic\Pagination\Paginator;
@@ -53,6 +55,9 @@ class SchemaCompiler
      * @var array<class-string, array<string, array{class: class-string, method: ReflectionMethod, attr: ResolveFieldAttr}>>
      */
     private array $externalFieldResolvers = [];
+
+    /** @var array<string, bool> Whether each resolver method takes a DataLoader parameter */
+    private array $usesDataLoader = [];
 
     /**
      * @param array<class-string|object> $resolvers
@@ -187,7 +192,7 @@ class SchemaCompiler
                             $context,
                             $info
                         );
-                        $result = $method->invokeArgs($instance, $resolvedArgs);
+                        $result = $this->invokeResolver($method, $instance, $resolvedArgs);
                         if ($result === true && $source !== null) {
                             return $source;
                         }
@@ -432,7 +437,7 @@ class SchemaCompiler
                         return null;
                     }
                     $resolvedArgs = $this->argumentHydrator->resolveArguments($method, $args, $source, $context, $info);
-                    return $method->invokeArgs($source, $resolvedArgs);
+                    return $this->invokeResolver($method, $source, $resolvedArgs);
                 },
             ];
         }
@@ -463,13 +468,42 @@ class SchemaCompiler
                             $info,
                             $className
                         );
-                        return $extMethod->invokeArgs($instance, $resolvedArgs);
+                        return $this->invokeResolver($extMethod, $instance, $resolvedArgs);
                     },
                 ];
             }
         }
 
         return $fields;
+    }
+
+    /**
+     * Resolvers that take a DataLoader run in a Fiber, so DataLoader::get() can pause them until the batch loads.
+     *
+     * @param list<mixed> $args
+     */
+    private function invokeResolver(ReflectionMethod $method, object $target, array $args): mixed
+    {
+        $id = $method->getDeclaringClass()->getName() . '::' . $method->getName();
+        $this->usesDataLoader[$id] ??= $this->hasDataLoaderParameter($method);
+
+        if (!$this->usesDataLoader[$id]) {
+            return $method->invokeArgs($target, $args);
+        }
+
+        return FiberResolver::run(static fn (): mixed => $method->invokeArgs($target, $args));
+    }
+
+    private function hasDataLoaderParameter(ReflectionMethod $method): bool
+    {
+        foreach ($method->getParameters() as $param) {
+            $type = $param->getType();
+            if ($type instanceof ReflectionNamedType && is_a($type->getName(), DataLoader::class, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

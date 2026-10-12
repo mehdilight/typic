@@ -4,37 +4,20 @@ declare(strict_types=1);
 
 namespace Typic\Tests\Fixtures;
 
-use Typic\Attribute\KeyBy;
 use Typic\DataLoader\DataLoader;
 
 /**
- * @extends DataLoader<int, User>
+ * @extends DataLoader<int, User|null>
  */
-#[KeyBy('id')]
 class UserDataLoader extends DataLoader
 {
-    public int $batchCallCount = 0;
-
-    /**
-     * @param list<mixed> $keys
-     * @return list<User>
-     */
     protected function batch(array $keys): iterable
     {
-        $this->batchCallCount++;
-
         $users = [
-            1 => new User(1, 'Alice', 'alice@example.com'),
-            2 => new User(2, 'Bob', 'bob@example.com'),
+            new User(1, 'Alice', 'alice@example.com'),
+            new User(2, 'Bob', 'bob@example.com'),
         ];
 
-        $result = [];
-        foreach ($keys as $key) {
-            if (isset($users[(int) $key])) {
-                $result[] = $users[(int) $key];
-            }
-        }
-
-        return $result;
+        return $this->keyBy(array_filter($users, fn (User $user): bool => in_array($user->id, $keys, true)), 'id');
     }
 }
