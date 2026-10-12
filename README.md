@@ -17,6 +17,7 @@
 - **Real-Time Subscriptions**: Driver-based WebSocket subscription engine powered by Workerman, supporting the standard graphql-ws protocol, interchangeable drivers, and Redis Pub/Sub for multi-process delivery.
 - **Nested Input DTO Hydration**: Type-hint `readonly` DTO classes in your mutations; Typic recursively hydrates nested GraphQL input objects into strongly-typed PHP objects.
 - **Built-in DataLoader**: Write one `batch()` method and call `$loader->get($id)` in resolvers; Typic turns N lookups into one query.
+- **Resolver Middleware**: Stack checks and transforms around resolvers with `#[Middleware]` on a method or a whole class, named groups, and global middleware. Works for queries, mutations, field resolvers, and subscriptions.
 - **First-Class Pagination**: Automatic schema generation for both offset-based (`Paginator`) and Relay cursor-based (`Connection`) pagination.
 - **PSR-7 & PSR-15 Standard Compliant**: Integrates with any modern PHP framework (Laravel, Symfony, Spiral, Slim, Mezzio) or standalone HTTP runtimes.
 - **Embedded Apollo Sandbox**: Industry-standard, visual query builder and developer explorer served automatically at `/graphql` for browser requests.
@@ -330,6 +331,73 @@ $server = Typic::builder()
 ```
 
 Any explorer can also be opened per request with `?explorer=graphiql`, `?explorer=altair`, or `?explorer=apollo`.
+
+---
+
+### 8. Resolver Middleware
+
+A middleware runs around a resolver. It can check something first, pass values to the resolver, change the result, or stop the resolver from running:
+
+```php
+use GraphQL\Error\UserError;
+use Typic\Middleware\ResolverCall;
+use Typic\Middleware\ResolverMiddleware;
+
+final class Authenticated implements ResolverMiddleware
+{
+    public function __construct(private Users $users) {}
+
+    public function handle(ResolverCall $call, callable $next): mixed
+    {
+        // A header over HTTP; WebSocket clients usually send the token in connection_init
+        $token = $call->request()?->getHeaderLine('Authorization')
+            ?: ($call->connectionParams()['Authorization'] ?? '');
+        $user = $this->users->fromToken($token) ?? throw new UserError('You must be logged in.');
+
+        return $next($call->with('user', $user));
+    }
+}
+```
+
+Attach middleware to a class (every field in it) or to a method. Each entry is an instance, a class (built by your container when it has it), or a group name:
+
+```php
+#[Middleware(Authenticated::class)]
+class PostResolver
+{
+    #[Mutation]
+    #[Middleware(new Can('posts.publish'))]
+    #[Middleware(new RateLimit(perMinute: 10))]
+    public function publishPost(#[ID] int $id, #[FromCall('user')] User $user): Post { /* ... */ }
+
+    #[Query]
+    #[WithoutMiddleware(Authenticated::class)]
+    public function publicFeed(): array { /* ... */ }
+}
+```
+
+`#[FromCall('user')]` receives the value a middleware passed with `$call->with('user', ...)`. It is not a GraphQL argument.
+
+Register global middleware and named groups on the builder. Groups may include other groups:
+
+```php
+$server = Typic::builder()
+    ->withResolverMiddleware(new LogSlowFields(thresholdMs: 50))
+    ->withMiddlewareGroup('admin', [Authenticated::class, new Can('admin'), AuditLog::class])
+    ->build();
+
+// #[Middleware('admin')] on a class or method
+```
+
+**Order**, outermost first: global middleware, then the class's `#[Middleware]`, then the method's, each in the order written. For `publishPost` above that is `Authenticated -> Can -> RateLimit -> publishPost`, and the result passes back out through each one. Middleware listed twice runs twice. `#[WithoutMiddleware]` takes classes or group names and removes them from what the method inherits (global and class); the method's own middleware still runs.
+
+**`ResolverCall`** gives `args()`, `arg($name)`, `withArgs($args)`, `parent()`, `field()` (for example `"Mutation.publishPost"`), `request()`, `connectionParams()`, `context()`, `info()`, `subscribing()`, and `with()`, `get()`, `has()` for values passed along.
+
+**Subscriptions**: when a client subscribes, the field's middleware runs without the resolver (`$call->subscribing()` is true and `$next()` returns `null`). Throwing refuses the subscription with an `error` message. The middleware then runs again, with the resolver, for every event. Over WebSocket, `request()` is the HTTP request that opened the connection.
+
+**DataLoaders**: for resolvers that call `$loader->get()`, `$next()` returns the loaded value, and batching still applies.
+
+Unknown classes or group names, and groups that include themselves, fail when the schema is built.
 
 ---
 

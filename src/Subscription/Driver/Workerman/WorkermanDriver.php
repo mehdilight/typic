@@ -109,13 +109,14 @@ class WorkermanDriver implements WebSocketServerInterface, HttpServerInterface
         $this->worker->count = $this->workerCount;
         $this->worker->name = $this->workerName;
 
-        $this->worker->onWebSocketConnect = function (TcpConnection $connection): void {
+        $this->worker->onWebSocketConnect = function (TcpConnection $connection, WorkermanRequest $request): void {
             // Negotiate the graphql-transport-ws subprotocol
             $connection->headers = [
                 'Sec-WebSocket-Protocol: graphql-transport-ws',
             ];
 
-            $wrapped = new WorkermanConnection($connection);
+            // Keep the upgrade request, so middleware can read its headers and cookies
+            $wrapped = new WorkermanConnection($connection, $this->toPsrRequest($request, $connection));
             $this->connections[$connection->id] = $wrapped;
 
             if ($this->onConnectCallback !== null) {

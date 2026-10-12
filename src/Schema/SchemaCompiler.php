@@ -24,6 +24,7 @@ use Typic\Attribute\Arg;
 use Typic\Attribute\Deprecated;
 use Typic\Attribute\Description;
 use Typic\Attribute\EnumType as EnumTypeAttr;
+use Typic\Attribute\FromCall;
 use Typic\Attribute\Field as FieldAttr;
 use Typic\Attribute\ID;
 use Typic\Attribute\InputType as InputTypeAttr;
@@ -33,18 +34,24 @@ use Typic\Attribute\Payload as PayloadAttr;
 use Typic\Attribute\Query as QueryAttr;
 use Typic\Attribute\ResolveField as ResolveFieldAttr;
 use Typic\Attribute\Subscription as SubscriptionAttr;
+use Typic\Context;
 use Typic\DataLoader\DataLoader;
 use Typic\DataLoader\FiberResolver;
+use Typic\Middleware\MiddlewareStack;
+use Typic\Middleware\ResolverCall;
+use Typic\Middleware\ResolverMiddleware;
 use Typic\Pagination\Connection;
 use Typic\Pagination\PageInfo;
 use Typic\Pagination\Paginator;
 use Typic\Pagination\PaginatorInfo;
+use Typic\Subscription\SubscriptionSignal;
 use UnitEnum;
 
 class SchemaCompiler
 {
     private TypeRegistry $typeRegistry;
     private ArgumentHydrator $argumentHydrator;
+    private MiddlewareStack $middleware;
 
     /**
      * @var array<class-string, object>
@@ -69,9 +76,11 @@ class SchemaCompiler
         private ?ContainerInterface $container = null,
         ?TypeRegistry $typeRegistry = null,
         ?ArgumentHydrator $argumentHydrator = null,
+        ?MiddlewareStack $middleware = null,
     ) {
         $this->typeRegistry = $typeRegistry ?? new TypeRegistry();
         $this->argumentHydrator = $argumentHydrator ?? new ArgumentHydrator($this->container);
+        $this->middleware = $middleware ?? new MiddlewareStack(container: $this->container);
     }
 
     /**
@@ -159,6 +168,7 @@ class SchemaCompiler
     private function buildRootFields(string $attributeClass): array
     {
         $fields = [];
+        $isSubscription = $attributeClass === SubscriptionAttr::class;
 
         foreach ($this->resolvers as $resolver) {
             $ref = is_object($resolver) ? new ReflectionClass($resolver) : new ReflectionClass($resolver);
@@ -176,6 +186,7 @@ class SchemaCompiler
 
                 $fieldType = $this->determineReturnType($method, $attr->arrayOf, $attr->type, $attr->nullable);
                 $argsConfig = $this->buildArgumentsConfig($method);
+                $stack = $this->middleware->for($ref, $method);
 
                 $fields[$fieldName] = [
                     'name' => $fieldName,
@@ -183,16 +194,18 @@ class SchemaCompiler
                     'description' => $this->extractDescription($method, $attr->description),
                     'deprecationReason' => $this->extractDeprecationReason($method, $attr->deprecationReason),
                     'args' => $argsConfig,
-                    'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($resolverClass, $method) {
+                    'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($resolverClass, $method, $stack, $isSubscription) {
+                        if ($isSubscription && $context instanceof Context && $context->get('subscribing') === true) {
+                            // Subscribing: run the middleware only, so it can refuse the subscription
+                            MiddlewareStack::run($stack, new ResolverCall($source, $args, $context, $info), static fn (): mixed => null);
+                            throw SubscriptionSignal::accepted();
+                        }
+
                         $instance = $this->resolveResolverInstance($resolverClass);
-                        $resolvedArgs = $this->argumentHydrator->resolveArguments(
-                            $method,
-                            $args,
-                            $source,
-                            $context,
-                            $info
-                        );
-                        $result = $this->invokeResolver($method, $instance, $resolvedArgs);
+                        $result = $this->callResolver($stack, $method, $instance, $source, $args, $context, $info);
+                        if ($isSubscription && $result === false) {
+                            throw SubscriptionSignal::filtered();
+                        }
                         if ($result === true && $source !== null) {
                             return $source;
                         }
@@ -425,6 +438,7 @@ class SchemaCompiler
 
             $type = $this->determineReturnType($method, $fieldAttr->arrayOf, $fieldAttr->type, $fieldAttr->nullable, $isId);
             $argsConfig = $this->buildArgumentsConfig($method);
+            $stack = $this->middleware->for($ref, $method);
 
             $fields[$fieldName] = [
                 'name' => $fieldName,
@@ -432,12 +446,11 @@ class SchemaCompiler
                 'description' => $this->extractDescription($method, $fieldAttr->description),
                 'deprecationReason' => $this->extractDeprecationReason($method, $fieldAttr->deprecationReason),
                 'args' => $argsConfig,
-                'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($method) {
+                'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($method, $stack) {
                     if (!is_object($source)) {
                         return null;
                     }
-                    $resolvedArgs = $this->argumentHydrator->resolveArguments($method, $args, $source, $context, $info);
-                    return $this->invokeResolver($method, $source, $resolvedArgs);
+                    return $this->callResolver($stack, $method, $source, $source, $args, $context, $info);
                 },
             ];
         }
@@ -451,6 +464,7 @@ class SchemaCompiler
 
                 $type = $this->determineReturnType($extMethod, $extAttr->arrayOf, $extAttr->type, $extAttr->nullable);
                 $argsConfig = $this->buildArgumentsConfig($extMethod, $className);
+                $stack = $this->middleware->for(new ReflectionClass($extResolverClass), $extMethod);
 
                 $fields[$fieldName] = [
                     'name' => $fieldName,
@@ -458,17 +472,9 @@ class SchemaCompiler
                     'description' => $this->extractDescription($extMethod, $extAttr->description),
                     'deprecationReason' => $this->extractDeprecationReason($extMethod, $extAttr->deprecationReason),
                     'args' => $argsConfig,
-                    'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($extResolverClass, $extMethod, $className) {
+                    'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($extResolverClass, $extMethod, $className, $stack) {
                         $instance = $this->resolveResolverInstance($extResolverClass);
-                        $resolvedArgs = $this->argumentHydrator->resolveArguments(
-                            $extMethod,
-                            $args,
-                            $source,
-                            $context,
-                            $info,
-                            $className
-                        );
-                        return $this->invokeResolver($extMethod, $instance, $resolvedArgs);
+                        return $this->callResolver($stack, $extMethod, $instance, $source, $args, $context, $info, $className);
                     },
                 ];
             }
@@ -478,20 +484,48 @@ class SchemaCompiler
     }
 
     /**
-     * Resolvers that take a DataLoader run in a Fiber, so DataLoader::get() can pause them until the batch loads.
+     * Call a resolver method inside its middleware stack.
      *
-     * @param list<mixed> $args
+     * Resolvers that take a DataLoader run in a Fiber, so DataLoader::get() can pause them
+     * until the batch loads. The middleware runs in the same Fiber, so $next() returns the
+     * loaded value rather than a promise.
+     *
+     * @param list<ResolverMiddleware> $stack
+     * @param array<string, mixed> $args
+     * @param class-string|null $sourceClass
      */
-    private function invokeResolver(ReflectionMethod $method, object $target, array $args): mixed
-    {
+    private function callResolver(
+        array $stack,
+        ReflectionMethod $method,
+        object $target,
+        mixed $source,
+        array $args,
+        mixed $context,
+        ResolveInfo $info,
+        ?string $sourceClass = null,
+    ): mixed {
+        $resolve = function (?ResolverCall $call) use ($method, $target, $source, $args, $context, $info, $sourceClass): mixed {
+            $resolvedArgs = $this->argumentHydrator->resolveArguments(
+                $method,
+                $call?->args() ?? $args,
+                $source,
+                $context,
+                $info,
+                $sourceClass,
+                $call,
+            );
+
+            return $method->invokeArgs($target, $resolvedArgs);
+        };
+
+        $run = $stack === []
+            ? static fn (): mixed => $resolve(null)
+            : static fn (): mixed => MiddlewareStack::run($stack, new ResolverCall($source, $args, $context, $info), $resolve);
+
         $id = $method->getDeclaringClass()->getName() . '::' . $method->getName();
         $this->usesDataLoader[$id] ??= $this->hasDataLoaderParameter($method);
 
-        if (!$this->usesDataLoader[$id]) {
-            return $method->invokeArgs($target, $args);
-        }
-
-        return FiberResolver::run(static fn (): mixed => $method->invokeArgs($target, $args));
+        return $this->usesDataLoader[$id] ? FiberResolver::run($run) : $run();
     }
 
     private function hasDataLoaderParameter(ReflectionMethod $method): bool
@@ -531,6 +565,7 @@ class SchemaCompiler
             }
 
             if (!empty($param->getAttributes('Typic\Attribute\Context')) ||
+                !empty($param->getAttributes(FromCall::class)) ||
                 !empty($param->getAttributes('Typic\Attribute\Info')) ||
                 !empty($param->getAttributes('Typic\Attribute\Inject')) ||
                 !empty($param->getAttributes(PayloadAttr::class)) ||

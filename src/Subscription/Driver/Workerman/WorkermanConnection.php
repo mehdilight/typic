@@ -4,14 +4,22 @@ declare(strict_types=1);
 
 namespace Typic\Subscription\Driver\Workerman;
 
+use Psr\Http\Message\ServerRequestInterface;
+use Typic\Subscription\Driver\HandshakeAwareInterface;
 use Typic\Subscription\Driver\WebSocketConnectionInterface;
 use Workerman\Connection\TcpConnection;
 
-class WorkermanConnection implements WebSocketConnectionInterface
+class WorkermanConnection implements WebSocketConnectionInterface, HandshakeAwareInterface
 {
     public function __construct(
         private TcpConnection $connection,
+        private ?ServerRequestInterface $handshakeRequest = null,
     ) {
+    }
+
+    public function getHandshakeRequest(): ?ServerRequestInterface
+    {
+        return $this->handshakeRequest;
     }
 
     public function getId(): string

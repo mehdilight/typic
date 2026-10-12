@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Typic\Schema;
 
 use GraphQL\Type\Definition\ResolveInfo;
+use LogicException;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use ReflectionMethod;
@@ -12,12 +13,14 @@ use ReflectionNamedType;
 use ReflectionParameter;
 use Typic\Attribute\Arg;
 use Typic\Attribute\Context as ContextAttr;
+use Typic\Attribute\FromCall;
 use Typic\Attribute\Info as InfoAttr;
 use Typic\Attribute\Inject;
 use Typic\Attribute\InputType;
 use Typic\Attribute\Payload as PayloadAttr;
 use Typic\Context;
 use Typic\DataLoader\DataLoader;
+use Typic\Middleware\ResolverCall;
 use Typic\Subscription\PubSub\PubSubInterface;
 
 class ArgumentHydrator
@@ -36,6 +39,7 @@ class ArgumentHydrator
      * @param mixed $context
      * @param ResolveInfo $info
      * @param class-string|null $sourceClass
+     * @param ResolverCall|null $call The call as the resolver's middleware left it, for #[FromCall]
      * @return list<mixed>
      */
     public function resolveArguments(
@@ -45,14 +49,44 @@ class ArgumentHydrator
         mixed $context,
         ResolveInfo $info,
         ?string $sourceClass = null,
+        ?ResolverCall $call = null,
     ): array {
         $resolved = [];
 
         foreach ($method->getParameters() as $param) {
-            $resolved[] = $this->resolveParameter($param, $args, $source, $context, $info, $sourceClass);
+            $fromCall = $param->getAttributes(FromCall::class);
+            $resolved[] = $fromCall !== []
+                ? $this->resolveFromCall($param, $fromCall[0]->newInstance()->key, $call)
+                : $this->resolveParameter($param, $args, $source, $context, $info, $sourceClass);
         }
 
         return $resolved;
+    }
+
+    private function resolveFromCall(ReflectionParameter $param, string $key, ?ResolverCall $call): mixed
+    {
+        if ($call !== null && $call->has($key)) {
+            return $call->get($key);
+        }
+
+        if ($param->isDefaultValueAvailable()) {
+            return $param->getDefaultValue();
+        }
+
+        if ($param->allowsNull()) {
+            return null;
+        }
+
+        $method = $param->getDeclaringFunction();
+        throw new LogicException(sprintf(
+            "%s::%s() takes #[FromCall('%s')] \$%s, but no middleware set it. "
+            . "Add a middleware that calls \$call->with('%s', ...), or make the parameter nullable.",
+            $method instanceof ReflectionMethod ? $method->getDeclaringClass()->getName() : '',
+            $method->getName(),
+            $key,
+            $param->getName(),
+            $key,
+        ));
     }
 
     /**

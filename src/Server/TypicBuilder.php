@@ -7,6 +7,8 @@ namespace Typic\Server;
 use Psr\Container\ContainerInterface;
 use Typic\Explorer\ExplorerInterface;
 use Typic\Explorer\ExplorerType;
+use Typic\Middleware\MiddlewareStack;
+use Typic\Middleware\ResolverMiddleware;
 use Typic\Scanner\DirectoryScanner;
 use Typic\Schema\SchemaCompiler;
 use Typic\Subscription\Driver\HttpServerInterface;
@@ -46,6 +48,12 @@ class TypicBuilder
     private ?WebSocketServerInterface $subscriptionDriver = null;
     private ?PubSubInterface $pubSub = null;
     private ?string $subscriptionEndpoint = null;
+
+    /** @var list<ResolverMiddleware|string> */
+    private array $resolverMiddleware = [];
+
+    /** @var array<string, list<ResolverMiddleware|string>> */
+    private array $middlewareGroups = [];
 
     /**
      * @var array<string, mixed>
@@ -226,6 +234,32 @@ class TypicBuilder
     }
 
     /**
+     * Run middleware around every resolver method, outside any #[Middleware] on classes and methods.
+     *
+     * @param ResolverMiddleware|string ...$middleware Instances, classes (built by the container when it
+     *                                                 has them), or group names
+     * @return $this
+     */
+    public function withResolverMiddleware(ResolverMiddleware|string ...$middleware): self
+    {
+        array_push($this->resolverMiddleware, ...array_values($middleware));
+        return $this;
+    }
+
+    /**
+     * Name a stack of middleware, to use as #[Middleware('name')]. The group expands in place,
+     * and may include other groups.
+     *
+     * @param list<ResolverMiddleware|string> $middleware Instances, classes, or group names
+     * @return $this
+     */
+    public function withMiddlewareGroup(string $name, array $middleware): self
+    {
+        $this->middlewareGroups[$name] = $middleware;
+        return $this;
+    }
+
+    /**
      * Enable GraphQL real-time subscriptions with a pluggable WebSocket driver and Pub/Sub backplane.
      *
      * When the driver implements HttpServerInterface (WorkermanDriver does), it also serves the
@@ -277,6 +311,7 @@ class TypicBuilder
             resolvers: $resolvers,
             types: $types,
             container: $this->container,
+            middleware: new MiddlewareStack($this->resolverMiddleware, $this->middlewareGroups, $this->container),
         );
 
         $schema = $compiler->compile();

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Typic\Subscription\Protocol;
 
+use GraphQL\Error\Error;
 use GraphQL\Error\FormattedError;
 use GraphQL\Error\SyntaxError;
 use GraphQL\GraphQL;
@@ -12,14 +13,13 @@ use GraphQL\Language\AST\OperationDefinitionNode;
 use GraphQL\Language\Parser;
 use GraphQL\Type\Schema;
 use Psr\Container\ContainerInterface;
-use ReflectionClass;
-use ReflectionNamedType;
 use Throwable;
 use Typic\Context;
-use Typic\Schema\ArgumentHydrator;
+use Typic\Subscription\Driver\HandshakeAwareInterface;
 use Typic\Subscription\Driver\WebSocketConnectionInterface;
 use Typic\Subscription\PubSub\PubSubInterface;
 use Typic\Subscription\SubscriptionRegistry;
+use Typic\Subscription\SubscriptionSignal;
 
 class GraphqlWsHandler
 {
@@ -30,20 +30,17 @@ class GraphqlWsHandler
     private array $activeSubscriptions = [];
 
     /**
-     * @var array<class-string, object>
+     * The connection_init payload of each connection.
+     * @var array<string, array<string, mixed>>
      */
-    private array $resolverInstances = [];
-
-    private ArgumentHydrator $argumentHydrator;
+    private array $connectionParams = [];
 
     public function __construct(
         private Schema $schema,
         private SubscriptionRegistry $registry,
         private PubSubInterface $pubSub,
         private ?ContainerInterface $container = null,
-        ?ArgumentHydrator $argumentHydrator = null,
     ) {
-        $this->argumentHydrator = $argumentHydrator ?? new ArgumentHydrator($this->container);
     }
 
     public function handleConnect(WebSocketConnectionInterface $connection): void
@@ -60,6 +57,7 @@ class GraphqlWsHandler
             }
             unset($this->activeSubscriptions[$connId]);
         }
+        unset($this->connectionParams[$connId]);
     }
 
     public function handleMessage(WebSocketConnectionInterface $connection, string $message): void
@@ -73,6 +71,9 @@ class GraphqlWsHandler
 
         switch ($type) {
             case 'connection_init':
+                /** @var array<string, mixed> $params */
+                $params = is_array($data['payload'] ?? null) ? $data['payload'] : [];
+                $this->connectionParams[$connection->getId()] = $params;
                 $this->sendAck($connection);
                 break;
 
@@ -132,6 +133,21 @@ class GraphqlWsHandler
             return;
         }
 
+        // Validate the operation and run the field's middleware, which may refuse the subscription
+        $outcome = GraphQL::executeQuery(
+            $this->schema,
+            $document,
+            null,
+            $this->createContext($connection, subscribing: true),
+            $payload['variables'] ?? null,
+            $payload['operationName'] ?? null,
+        );
+        $errors = $this->withoutSignals($outcome->errors);
+        if ($errors !== []) {
+            $this->sendErrors($connection, $subId, $errors);
+            return;
+        }
+
         $topic = $subscriptionMeta['topic'];
         $connId = $connection->getId();
 
@@ -151,6 +167,9 @@ class GraphqlWsHandler
     }
 
     /**
+     * Resolve the subscription for one event. The subscription field's resolver (and its
+     * middleware) runs with the event as its parent; returning false skips the event.
+     *
      * @param array{query?: string, variables?: array<string, mixed>, operationName?: string|null} $payload
      * @param array{fieldName: string, topic: string, resolverClass: class-string, method: \ReflectionMethod, attribute: \Typic\Attribute\Subscription} $subscriptionMeta
      */
@@ -161,84 +180,51 @@ class GraphqlWsHandler
         array $payload,
         array $subscriptionMeta,
     ): void {
-        $method = $subscriptionMeta['method'];
-        $resolverClass = $subscriptionMeta['resolverClass'];
-        $instance = $this->resolveResolverInstance($resolverClass);
-
-        $variables = $payload['variables'] ?? [];
-        $query = $payload['query'] ?? '';
-        $opName = $payload['operationName'] ?? null;
-
-        $context = new Context([
-            'connection' => $connection,
-            'container' => $this->container,
-            'pubSub' => $this->pubSub,
-        ]);
-
-        $subscriptionType = $this->schema->getSubscriptionType()
-            ?? new \GraphQL\Type\Definition\ObjectType(['name' => 'Subscription', 'fields' => []]);
-        $fieldDef = $subscriptionType->hasField($subscriptionMeta['fieldName'])
-            ? $subscriptionType->getField($subscriptionMeta['fieldName'])
-            : new \GraphQL\Type\Definition\FieldDefinition([
-                'name' => $subscriptionMeta['fieldName'],
-                'type' => \GraphQL\Type\Definition\Type::string(),
-            ]);
-
-        $resolveInfo = new \GraphQL\Type\Definition\ResolveInfo(
-            fieldDefinition: $fieldDef,
-            fieldNodes: new \ArrayObject([]),
-            parentType: $subscriptionType,
-            path: [$subscriptionMeta['fieldName']],
-            schema: $this->schema,
-            fragments: [],
-            rootValue: $eventPayload,
-            operation: new OperationDefinitionNode(['operation' => 'subscription']),
-            variableValues: $variables,
-        );
-
-        $resolvedArgs = $this->argumentHydrator->resolveArguments(
-            $method,
-            $variables,
-            $eventPayload,
-            $context,
-            $resolveInfo,
-            is_object($eventPayload) ? get_class($eventPayload) : null,
-        );
-
-        $rootValue = $eventPayload;
-
-        try {
-            $filterResult = $method->invokeArgs($instance, $resolvedArgs);
-
-            // If resolver returned false, event is filtered out for this subscriber
-            if ($filterResult === false) {
-                return;
-            }
-
-            // If resolver returned an object or array, use it as the source/rootValue
-            if (is_object($filterResult) || (is_array($filterResult) && !empty($filterResult))) {
-                $rootValue = $filterResult;
-            }
-        } catch (Throwable $e) {
-            $this->sendError($connection, $subId, $e->getMessage());
-            return;
-        }
-
-        // Execute GraphQL selection set against rootValue
         try {
             $result = GraphQL::executeQuery(
                 $this->schema,
-                $query,
-                $rootValue,
-                $context,
-                $variables,
-                $opName
+                $payload['query'] ?? '',
+                $eventPayload,
+                $this->createContext($connection, subscribing: false),
+                $payload['variables'] ?? null,
+                $payload['operationName'] ?? null,
             );
-
-            $this->sendNext($connection, $subId, $result->toArray());
         } catch (Throwable $e) {
-            $this->sendError($connection, $subId, $e->getMessage());
+            $this->sendErrors($connection, $subId, [$e]);
+            return;
         }
+
+        foreach ($result->errors as $error) {
+            if ($error->getPrevious() instanceof SubscriptionSignal && !$error->getPrevious()->accepted) {
+                return;
+            }
+        }
+
+        $this->sendNext($connection, $subId, $result->toArray());
+    }
+
+    private function createContext(WebSocketConnectionInterface $connection, bool $subscribing): Context
+    {
+        return new Context([
+            'connection' => $connection,
+            'connectionParams' => $this->connectionParams[$connection->getId()] ?? [],
+            'request' => $connection instanceof HandshakeAwareInterface ? $connection->getHandshakeRequest() : null,
+            'subscribing' => $subscribing,
+            'container' => $this->container,
+            'pubSub' => $this->pubSub,
+        ]);
+    }
+
+    /**
+     * @param array<Error> $errors
+     * @return list<Error>
+     */
+    private function withoutSignals(array $errors): array
+    {
+        return array_values(array_filter(
+            $errors,
+            static fn (Error $error): bool => !$error->getPrevious() instanceof SubscriptionSignal,
+        ));
     }
 
     /**
@@ -312,43 +298,17 @@ class GraphqlWsHandler
     }
 
     /**
-     * @param class-string $className
+     * Send errors the way GraphQL responses show them: messages of internal exceptions stay hidden.
+     *
+     * @param array<Throwable> $errors
      */
-    private function resolveResolverInstance(string $className): object
+    private function sendErrors(WebSocketConnectionInterface $connection, string $subId, array $errors): void
     {
-        if (isset($this->resolverInstances[$className])) {
-            return $this->resolverInstances[$className];
-        }
-
-        if ($this->container !== null && $this->container->has($className)) {
-            $instance = $this->container->get($className);
-            $this->resolverInstances[$className] = $instance;
-            return $instance;
-        }
-
-        $ref = new ReflectionClass($className);
-        $constructor = $ref->getConstructor();
-        if ($constructor === null || empty($constructor->getParameters())) {
-            $instance = new $className();
-            $this->resolverInstances[$className] = $instance;
-            return $instance;
-        }
-
-        $args = [];
-        foreach ($constructor->getParameters() as $p) {
-            $pType = $p->getType();
-            if ($pType instanceof ReflectionNamedType && $this->container !== null && $this->container->has($pType->getName())) {
-                $args[] = $this->container->get($pType->getName());
-            } elseif ($p->isDefaultValueAvailable()) {
-                $args[] = $p->getDefaultValue();
-            } else {
-                $args[] = null;
-            }
-        }
-
-        $instance = $ref->newInstanceArgs($args);
-        $this->resolverInstances[$className] = $instance;
-        return $instance;
+        $connection->send((string) json_encode([
+            'id' => $subId,
+            'type' => 'error',
+            'payload' => array_map(static fn (Throwable $error): array => FormattedError::createFromException($error), array_values($errors)),
+        ]));
     }
 
     /**

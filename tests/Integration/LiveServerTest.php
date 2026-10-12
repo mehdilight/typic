@@ -137,6 +137,44 @@ class LiveServerTest extends TestCase
         fclose($ws);
     }
 
+    public function test_middleware_reads_the_websocket_handshake_headers(): void
+    {
+        $this->startServer(redis: false, workers: 1);
+        $subscribe = [
+            'id' => 'sub_1',
+            'type' => 'subscribe',
+            'payload' => ['query' => 'subscription { privateMessageSent { text } }'],
+        ];
+
+        $anonymous = $this->openWebSocket('/graphql');
+        $this->wsSend($anonymous, ['type' => 'connection_init']);
+        $this->assertSame('connection_ack', $this->wsReceive($anonymous)['type']);
+        $this->wsSend($anonymous, $subscribe);
+        $refused = $this->wsReceive($anonymous);
+        $this->assertSame('error', $refused['type']);
+        $this->assertSame('Unauthorized', $refused['payload'][0]['message']);
+        fclose($anonymous);
+
+        $member = $this->openWebSocket('/graphql', ['Authorization: Bearer live-token']);
+        $this->wsSend($member, ['type' => 'connection_init']);
+        $this->assertSame('connection_ack', $this->wsReceive($member)['type']);
+        $this->wsSend($member, $subscribe);
+        $this->wsSend($member, ['type' => 'ping']);
+        $this->assertSame('pong', $this->wsReceive($member)['type'], 'Accepted: no error before the pong');
+
+        $this->http(
+            'POST',
+            '/graphql',
+            (string) json_encode(['query' => 'mutation { sendMessage(text: "psst") { id } }']),
+            ['Content-Type: application/json'],
+        );
+
+        $event = $this->wsReceive($member);
+        $this->assertSame('next', $event['type']);
+        $this->assertSame('psst', $event['payload']['data']['privateMessageSent']['text']);
+        fclose($member);
+    }
+
     private function waitForRedisSubscriber(string $channel): void
     {
         $redis = new RedisClient();
@@ -194,9 +232,10 @@ class LiveServerTest extends TestCase
     }
 
     /**
+     * @param list<string> $headers Extra handshake headers, e.g. 'Authorization: Bearer x'
      * @return resource
      */
-    private function openWebSocket(string $path)
+    private function openWebSocket(string $path, array $headers = [])
     {
         $socket = stream_socket_client("tcp://127.0.0.1:{$this->port}", $errno, $errstr, 5);
         $this->assertIsResource($socket, "Could not connect: {$errstr}");
@@ -208,7 +247,9 @@ class LiveServerTest extends TestCase
             . "Connection: Upgrade\r\n"
             . 'Sec-WebSocket-Key: ' . base64_encode(random_bytes(16)) . "\r\n"
             . "Sec-WebSocket-Version: 13\r\n"
-            . "Sec-WebSocket-Protocol: graphql-transport-ws\r\n\r\n");
+            . "Sec-WebSocket-Protocol: graphql-transport-ws\r\n"
+            . implode('', array_map(static fn (string $header): string => "{$header}\r\n", $headers))
+            . "\r\n");
 
         $handshake = '';
         while (!str_contains($handshake, "\r\n\r\n")) {

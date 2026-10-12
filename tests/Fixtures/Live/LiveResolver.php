@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Typic\Tests\Fixtures\Live;
 
+use Typic\Attribute\Middleware;
 use Typic\Attribute\Mutation;
 use Typic\Attribute\Query;
 use Typic\Attribute\Subscription;
@@ -29,6 +30,13 @@ class LiveResolver
 
     #[Subscription(name: 'messageSent', type: LiveMessage::class, topic: 'MESSAGE_SENT')]
     public function messageSent(): bool
+    {
+        return true;
+    }
+
+    #[Subscription(name: 'privateMessageSent', type: LiveMessage::class, topic: 'MESSAGE_SENT')]
+    #[Middleware(new RequireToken('live-token'))]
+    public function privateMessageSent(): bool
     {
         return true;
     }
