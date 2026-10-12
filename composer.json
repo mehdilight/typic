@@ -1,5 +1,5 @@
 {
-    "name": "typic/typic",
+    "name": "phpmystic/typic",
     "description": "Modern, code-first, attribute-driven GraphQL framework for PHP",
     "type": "library",
     "license": "MIT",

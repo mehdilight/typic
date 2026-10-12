@@ -29,8 +29,10 @@
 ## Installation
 
 ```bash
-composer require typic/typic
+composer require phpmystic/typic
 ```
+
+The Composer package is `phpmystic/typic`; PHP classes use the `Typic\` namespace, for example `use Typic\Application;`.
 
 ---
 
