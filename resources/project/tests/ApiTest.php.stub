@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests;
+
+use PHPUnit\Framework\TestCase;
+
+final class ApiTest extends TestCase
+{
+    public function test_hello(): void
+    {
+        $app = require __DIR__ . '/../bootstrap.php';
+        $this->assertSame(['data' => ['hello' => 'Hello, world!']], $app->build()->execute('{ hello }'));
+    }
+}

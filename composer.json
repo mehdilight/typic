@@ -6,6 +6,7 @@
     "require": {
         "php": ">=8.2",
         "ext-mbstring": "*",
+        "composer-runtime-api": "^2.2",
         "nyholm/psr7": "^1.8",
         "php-di/php-di": "^7",
         "psr/container": "^1.1 || ^2.0",
@@ -14,6 +15,8 @@
         "psr/http-server-handler": "^1.0",
         "psr/http-server-middleware": "^1.0",
         "psr/log": "^2.0 || ^3.0",
+        "symfony/console": "^7.4",
+        "symfony/process": "^7.4",
         "webonyx/graphql-php": "^15.0",
         "workerman/workerman": "^5.2"
     },
@@ -40,5 +43,8 @@
         "allow-plugins": {}
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "bin": [
+        "bin/typic"
+    ]
 }

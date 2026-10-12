@@ -1,0 +1,39 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GraphQL\Resolvers;
+
+use App\Services\GreetingService;
+use Typic\Attribute\Mutation;
+use Typic\Attribute\Payload;
+use Typic\Attribute\Query;
+use Typic\Attribute\Subscription;
+use Typic\Subscription\PubSub\PubSubInterface;
+
+final class GreetingResolver
+{
+    public function __construct(private GreetingService $greetings)
+    {
+    }
+
+    #[Query]
+    public function hello(string $name = 'world'): string
+    {
+        return $this->greetings->greet($name);
+    }
+
+    #[Mutation]
+    public function greet(string $name, PubSubInterface $pubSub): string
+    {
+        $message = $this->greetings->greet($name);
+        $pubSub->publish('GREETED', $message);
+        return $message;
+    }
+
+    #[Subscription(type: 'string', topic: 'GREETED')]
+    public function greeted(#[Payload] string $message): string
+    {
+        return $message;
+    }
+}

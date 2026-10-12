@@ -1,0 +1,48 @@
+# {{package_name}}
+
+A standalone GraphQL application built with `phpmystic/typic`.
+
+## Run
+
+```sh
+composer install
+composer start
+```
+
+Open http://localhost:8000/graphql for GraphiQL. Ctrl+C stops the foreground server. Run `php bin/server.php start -d` to daemonize, and `composer stop` to stop it. `composer dev` is an alias for `composer start`.
+
+Requirements: PHP 8.2+, mbstring, pcntl and posix, Composer, and Redis for live events. Queries work without Redis; publishing mutations and subscriptions use Redis at `redis://127.0.0.1:6379`. Override it with `REDIS_URL`.
+
+```graphql
+query { hello(name: "Mehdi") }
+mutation { greet(name: "Mehdi") }
+subscription { greeted }
+```
+
+Run the subscription in one explorer window, then the mutation in a second window to receive a live greeting.
+
+## Structure
+
+- `bootstrap.php`: Typic application and GraphQL configuration.
+- `config/services.php`: service bindings. Concrete classes autowire.
+- `src/Services`: application logic independent of GraphQL.
+- `src/GraphQL/Resolvers`: queries, mutations and subscriptions.
+- `bin/server.php`: starts the Workerman HTTP/WebSocket server.
+- `tests`: API tests.
+
+Settings come from the process environment:
+
+```sh
+PORT=9000 HOST=0.0.0.0 WORKERS=4 composer start
+APP_DEBUG=1 composer start
+```
+
+`APP_DEBUG` defaults to off. Runtime files are stored in `var/runtime`.
+
+```sh
+composer test
+composer phpstan
+composer export:schema
+```
+
+Commit `composer.lock` in this application to keep dependencies reproducible.

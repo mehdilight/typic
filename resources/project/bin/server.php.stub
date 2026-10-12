@@ -1,0 +1,19 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+require __DIR__ . '/../vendor/autoload.php';
+
+use Workerman\Worker;
+
+$runtime = __DIR__ . '/../var/runtime';
+if (!is_dir($runtime) && !mkdir($runtime, 0755, true) && !is_dir($runtime)) {
+    throw new RuntimeException('Cannot create the runtime directory.');
+}
+Worker::$pidFile = $runtime . '/server.pid';
+Worker::$logFile = $runtime . '/server.log';
+Worker::$statusFile = $runtime . '/server.status';
+
+$app = require __DIR__ . '/../bootstrap.php';
+$app->serve();

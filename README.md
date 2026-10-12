@@ -29,10 +29,52 @@
 ## Installation
 
 ```bash
-composer require phpmystic/typic
+composer require phpmystic/typic:^0.1
 ```
 
-The Composer package is `phpmystic/typic`; PHP classes use the `Typic\` namespace, for example `use Typic\Application;`.
+The first release is `v0.1.0`. Versions are published as Git tags, which Composer reads automatically. The Composer package is `phpmystic/typic`; PHP classes use the `Typic\` namespace, for example `use Typic\Application;`.
+
+---
+
+## Create a New Project
+
+The Composer package exposes a `typic` command. After installing Typic in a project:
+
+```sh
+vendor/bin/typic init ../my-api
+cd ../my-api
+composer start
+```
+
+`init` creates the application bootstrap, service bindings, sample query/mutation/subscription, GraphiQL, tests and server scripts, then runs `composer install`. It refuses non-empty directories. Use `--no-install` to generate files only, `--name=acme/my-api` to set the Composer project name, and `--framework-version=constraint` to select another framework version. By default it uses the installed Typic version.
+
+During development, use the local checkout as the dependency source:
+
+```sh
+php bin/typic init ../my-api --repository=.
+```
+
+`--repository` accepts an existing local checkout or a Git repository URL. This is needed before the package is available through Packagist, unless your Composer configuration already supplies its source.
+
+Until the package is listed on Packagist, configure its Git repository first:
+
+```sh
+composer config repositories.typic vcs https://github.com/mehdilight/typic
+# For a global installation instead:
+composer global config repositories.typic vcs https://github.com/mehdilight/typic
+```
+
+For global installation:
+
+```sh
+composer global require phpmystic/typic:^0.1
+export PATH="$(composer global config bin-dir --absolute):$PATH"
+typic init my-api
+```
+
+Put the PATH setting in your shell configuration to persist it. Local and global Composer binary proxies are supported. The CLI uses Symfony Console for commands, arguments, help, and shell completion, and Symfony Process to run Composer. Run `typic list`, `typic init --help`, or `typic completion --help` to explore it. Additional commands can be registered on `Typic\Console\ConsoleApplication` with `addCommand()`. `typic --version` displays the CLI version; `init --framework-version` selects the generated project’s dependency constraint.
+
+The generated project needs PHP 8.2+, mbstring, pcntl and posix. Redis is used for mutation publishing and subscriptions; queries work without it. See its README for `REDIS_URL`, host/port/worker settings and schema export.
 
 ---
 

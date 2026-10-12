@@ -1,0 +1,15 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+require __DIR__ . '/../vendor/autoload.php';
+
+use GraphQL\Utils\SchemaPrinter;
+
+$app = require __DIR__ . '/../bootstrap.php';
+$output = $argv[1] ?? __DIR__ . '/../schema.graphql';
+if (file_put_contents($output, SchemaPrinter::doPrint($app->build()->getSchema())) === false) {
+    throw new RuntimeException('Cannot write schema to ' . $output);
+}
+echo "Schema exported to {$output}\n";

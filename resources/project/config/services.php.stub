@@ -1,0 +1,7 @@
+<?php
+
+declare(strict_types=1);
+
+// Concrete services autowire. Add interface bindings and configuration here:
+// Repository::class => DI\autowire(SqliteRepository::class),
+return [];
