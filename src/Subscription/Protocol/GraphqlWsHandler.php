@@ -15,10 +15,13 @@ use GraphQL\Type\Schema;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Typic\Context;
+use Typic\Server\ErrorReporter;
+use Typic\Server\QueryLimits;
 use Typic\Subscription\Driver\HandshakeAwareInterface;
 use Typic\Subscription\Driver\WebSocketConnectionInterface;
 use Typic\Subscription\PubSub\PubSubInterface;
 use Typic\Subscription\SubscriptionRegistry;
+use Typic\Subscription\SubscriptionOptions;
 use Typic\Subscription\SubscriptionSignal;
 
 class GraphqlWsHandler
@@ -35,17 +38,39 @@ class GraphqlWsHandler
      */
     private array $connectionParams = [];
 
+    private ErrorReporter $errors;
+    private SubscriptionOptions $options;
+
+    /** @var callable(): float */
+    private $clock;
+
+    /** @var array<string, array{connection: WebSocketConnectionInterface, opened: float, activity: float, ping: float, initialized: bool}> */
+    private array $connections = [];
+
+    /** @param (callable(): float)|null $clock */
     public function __construct(
         private Schema $schema,
         private SubscriptionRegistry $registry,
         private PubSubInterface $pubSub,
         private ?ContainerInterface $container = null,
+        private ?QueryLimits $limits = null,
+        ?ErrorReporter $errors = null,
+        ?SubscriptionOptions $options = null,
+        ?callable $clock = null,
+        private ?int $maxMessageSize = null,
     ) {
+        $this->errors = $errors ?? new ErrorReporter();
+        $this->options = $options ?? new SubscriptionOptions();
+        $this->clock = $clock ?? static fn (): float => hrtime(true) / 1e9;
     }
 
     public function handleConnect(WebSocketConnectionInterface $connection): void
     {
-        // Connection opened
+        $now = ($this->clock)();
+        $this->connections[$connection->getId()] = [
+            'connection' => $connection, 'opened' => $now, 'activity' => $now,
+            'ping' => $now, 'initialized' => false,
+        ];
     }
 
     public function handleClose(WebSocketConnectionInterface $connection): void
@@ -57,42 +82,116 @@ class GraphqlWsHandler
             }
             unset($this->activeSubscriptions[$connId]);
         }
-        unset($this->connectionParams[$connId]);
+        unset($this->connectionParams[$connId], $this->connections[$connId]);
     }
 
     public function handleMessage(WebSocketConnectionInterface $connection, string $message): void
     {
-        $data = json_decode($message, true);
-        if (!is_array($data) || !isset($data['type']) || !is_string($data['type'])) {
+        $id = $connection->getId();
+        if (!isset($this->connections[$id])) {
             return;
         }
+        if ($this->maxMessageSize !== null && strlen($message) > $this->maxMessageSize) {
+            $this->close($connection, 1009, 'Message too large');
+            return;
+        }
+        $shape = json_decode($message);
+        $data = json_decode($message, true);
+        $objectPayload = !is_object($shape) || !isset($shape->payload) || $shape->payload instanceof \stdClass;
+        $objectVariables = !is_object($shape) || !isset($shape->payload->variables) || $shape->payload->variables instanceof \stdClass;
+        $objectExtensions = !is_object($shape) || !isset($shape->payload->extensions) || $shape->payload->extensions instanceof \stdClass;
+        if (!$shape instanceof \stdClass || !$objectPayload || !$objectVariables || !$objectExtensions || !is_array($data) || !$this->validMessage($data)) {
+            $this->close($connection, 4400, 'Invalid message');
+            return;
+        }
+        $this->connections[$id]['activity'] = ($this->clock)();
 
-        $type = $data['type'];
-
-        switch ($type) {
+        switch ($data['type']) {
             case 'connection_init':
+                if ($this->connections[$id]['initialized']) {
+                    $this->close($connection, 4429, 'Too many initialisation requests');
+                    return;
+                }
                 /** @var array<string, mixed> $params */
-                $params = is_array($data['payload'] ?? null) ? $data['payload'] : [];
-                $this->connectionParams[$connection->getId()] = $params;
+                $params = $data['payload'] ?? [];
+                $hook = $this->options->onConnectionInit;
+                try {
+                    $accepted = $hook === null || $hook($params, $connection instanceof HandshakeAwareInterface ? $connection->getHandshakeRequest() : null);
+                } catch (Throwable $e) {
+                    $this->errors->exception($e, 'connection initialisation');
+                    $accepted = false;
+                }
+                if (!$accepted) {
+                    $this->close($connection, 4403, 'Forbidden');
+                    return;
+                }
+                $this->connections[$id]['initialized'] = true;
+                $this->connectionParams[$id] = $params;
                 $this->sendAck($connection);
                 break;
-
             case 'ping':
-                $this->sendPong($connection);
+                $connection->send((string) json_encode(isset($data['payload']) ? ['type' => 'pong', 'payload' => $data['payload']] : ['type' => 'pong']));
                 break;
-
             case 'pong':
-                // Client heartbeat response
                 break;
-
             case 'subscribe':
+                if (!$this->connections[$id]['initialized']) {
+                    $this->close($connection, 4401, 'Unauthorized');
+                    return;
+                }
                 $this->handleSubscribe($connection, $data);
                 break;
-
             case 'complete':
                 $this->handleComplete($connection, $data);
                 break;
         }
+    }
+
+    /** @param array<mixed> $data */
+    private function validMessage(array $data): bool
+    {
+        $type = $data['type'] ?? null;
+        if (!in_array($type, ['connection_init', 'ping', 'pong', 'subscribe', 'complete'], true)) {
+            return false;
+        }
+        if (in_array($type, ['subscribe', 'complete'], true) && (!is_string($data['id'] ?? null) || $data['id'] === '')) {
+            return false;
+        }
+        $payload = $data['payload'] ?? null;
+        if (array_key_exists('payload', $data) && $payload !== null && (!is_array($payload) || ($payload !== [] && array_is_list($payload)))) {
+            return false;
+        }
+        if ($type === 'subscribe') {
+            return is_array($payload) && is_string($payload['query'] ?? null)
+                && (!isset($payload['operationName']) || is_string($payload['operationName']))
+                && (!isset($payload['variables']) || (is_array($payload['variables']) && ($payload['variables'] === [] || !array_is_list($payload['variables']))))
+                && (!isset($payload['extensions']) || (is_array($payload['extensions']) && ($payload['extensions'] === [] || !array_is_list($payload['extensions']))));
+        }
+        return true;
+    }
+
+    /** Custom event-loop drivers must call this periodically if they do not implement TickAwareInterface. */
+    public function tick(?float $now = null): void
+    {
+        $now ??= ($this->clock)();
+        foreach ($this->connections as $id => $state) {
+            if (!$state['initialized'] && $now - $state['opened'] >= $this->options->connectionInitTimeout) {
+                $this->close($state['connection'], 4408, 'Connection initialisation timeout');
+            } elseif ($state['initialized'] && $this->options->keepAlive > 0) {
+                if ($now - $state['activity'] >= 2 * $this->options->keepAlive) {
+                    $this->close($state['connection'], 1001, 'Connection idle');
+                } elseif ($now - $state['ping'] >= $this->options->keepAlive) {
+                    $state['connection']->send('{"type":"ping"}');
+                    $this->connections[$id]['ping'] = $now;
+                }
+            }
+        }
+    }
+
+    private function close(WebSocketConnectionInterface $connection, int $code, string $reason): void
+    {
+        $this->handleClose($connection);
+        $connection->close($code, $reason);
     }
 
     /**
@@ -102,6 +201,16 @@ class GraphqlWsHandler
     {
         $subId = isset($data['id']) ? (string) $data['id'] : null;
         if ($subId === null) {
+            return;
+        }
+
+        $connId = $connection->getId();
+        if (isset($this->activeSubscriptions[$connId][$subId])) {
+            $this->close($connection, 4409, "Subscriber for {$subId} already exists");
+            return;
+        }
+        if (count($this->activeSubscriptions[$connId] ?? []) >= $this->options->maxSubscriptionsPerConnection) {
+            $this->sendError($connection, $subId, "Too many subscriptions: at most {$this->options->maxSubscriptionsPerConnection} per connection.");
             return;
         }
 
@@ -141,8 +250,11 @@ class GraphqlWsHandler
             $this->createContext($connection, subscribing: true),
             $payload['variables'] ?? null,
             $payload['operationName'] ?? null,
+            null,
+            $this->limits?->rules(),
         );
         $errors = $this->withoutSignals($outcome->errors);
+        $this->errors->report($errors, $payload['operationName'] ?? null);
         if ($errors !== []) {
             $this->sendErrors($connection, $subId, $errors);
             return;
@@ -150,11 +262,6 @@ class GraphqlWsHandler
 
         $topic = $subscriptionMeta['topic'];
         $connId = $connection->getId();
-
-        // If client re-subscribes with same id, cancel prior
-        if (isset($this->activeSubscriptions[$connId][$subId])) {
-            $this->pubSub->unsubscribe($this->activeSubscriptions[$connId][$subId]['token']);
-        }
 
         $token = $this->pubSub->subscribe($topic, function (mixed $eventPayload) use ($connection, $subId, $payload, $subscriptionMeta): void {
             $this->dispatchSubscriptionEvent($connection, $subId, $eventPayload, $payload, $subscriptionMeta);
@@ -188,9 +295,13 @@ class GraphqlWsHandler
                 $this->createContext($connection, subscribing: false),
                 $payload['variables'] ?? null,
                 $payload['operationName'] ?? null,
+                null,
+                $this->limits?->rules(),
             );
         } catch (Throwable $e) {
+            $this->errors->exception($e, 'subscription event');
             $this->sendErrors($connection, $subId, [$e]);
+            $this->handleComplete($connection, ['id' => $subId]);
             return;
         }
 
@@ -199,6 +310,7 @@ class GraphqlWsHandler
                 return;
             }
         }
+        $this->errors->report($result->errors, $payload['operationName'] ?? null);
 
         $this->sendNext($connection, $subId, $result->toArray());
     }
@@ -267,11 +379,6 @@ class GraphqlWsHandler
     private function sendAck(WebSocketConnectionInterface $connection): void
     {
         $connection->send((string) json_encode(['type' => 'connection_ack']));
-    }
-
-    private function sendPong(WebSocketConnectionInterface $connection): void
-    {
-        $connection->send((string) json_encode(['type' => 'pong']));
     }
 
     /**

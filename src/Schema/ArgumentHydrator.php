@@ -7,6 +7,7 @@ namespace Typic\Schema;
 use GraphQL\Type\Definition\ResolveInfo;
 use LogicException;
 use Psr\Container\ContainerInterface;
+use Psr\Http\Message\ServerRequestInterface;
 use ReflectionClass;
 use ReflectionMethod;
 use ReflectionNamedType;
@@ -14,6 +15,7 @@ use ReflectionParameter;
 use Typic\Attribute\Arg;
 use Typic\Attribute\Context as ContextAttr;
 use Typic\Attribute\FromCall;
+use Typic\Attribute\FromRequest;
 use Typic\Attribute\Info as InfoAttr;
 use Typic\Attribute\Inject;
 use Typic\Attribute\InputType;
@@ -25,9 +27,12 @@ use Typic\Subscription\PubSub\PubSubInterface;
 
 class ArgumentHydrator
 {
+    private Instantiator $instantiator;
+
     public function __construct(
         private ?ContainerInterface $container = null,
     ) {
+        $this->instantiator = new Instantiator($container);
     }
 
     /**
@@ -55,12 +60,44 @@ class ArgumentHydrator
 
         foreach ($method->getParameters() as $param) {
             $fromCall = $param->getAttributes(FromCall::class);
-            $resolved[] = $fromCall !== []
-                ? $this->resolveFromCall($param, $fromCall[0]->newInstance()->key, $call)
-                : $this->resolveParameter($param, $args, $source, $context, $info, $sourceClass);
+            $fromRequest = $param->getAttributes(FromRequest::class);
+            $resolved[] = match (true) {
+                $fromCall !== [] => $this->resolveFromCall($param, $fromCall[0]->newInstance()->key, $call),
+                $fromRequest !== [] => $this->resolveFromRequest($param, $fromRequest[0]->newInstance()->name, $context),
+                default => $this->resolveParameter($param, $args, $source, $context, $info, $sourceClass),
+            };
         }
 
         return $resolved;
+    }
+
+    private function resolveFromRequest(ReflectionParameter $param, string $name, mixed $context): mixed
+    {
+        $request = $context instanceof Context ? $context->get('request') : null;
+        $value = $request instanceof ServerRequestInterface ? $request->getAttribute($name) : null;
+        if ($value !== null) {
+            return $value;
+        }
+
+        if ($param->isDefaultValueAvailable()) {
+            return $param->getDefaultValue();
+        }
+
+        if ($param->allowsNull()) {
+            return null;
+        }
+
+        $method = $param->getDeclaringFunction();
+        throw new LogicException(sprintf(
+            "%s::%s() takes #[FromRequest('%s')] \$%s, but the request has no '%s' attribute. "
+            . "Add HTTP middleware (withMiddleware()) that sets it with \$request->withAttribute('%s', ...), or make the parameter nullable.",
+            $method instanceof ReflectionMethod ? $method->getDeclaringClass()->getName() : '',
+            $method->getName(),
+            $name,
+            $param->getName(),
+            $name,
+            $name,
+        ));
     }
 
     private function resolveFromCall(ReflectionParameter $param, string $key, ?ResolverCall $call): mixed
@@ -210,12 +247,10 @@ class ArgumentHydrator
 
         if ($constructor === null || empty($constructor->getParameters())) {
             $instance = $refClass->newInstance();
-            foreach ($data as $key => $val) {
-                if ($refClass->hasProperty($key)) {
-                    $prop = $refClass->getProperty($key);
-                    $propType = $prop->getType();
-                    $val = $this->castValueToType($val, $propType);
-                    $prop->setValue($instance, $val);
+            foreach ($refClass->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
+                $key = self::graphQLName($prop);
+                if (array_key_exists($key, $data)) {
+                    $prop->setValue($instance, $this->castValueToType($data[$key], $prop->getType()));
                 }
             }
             return $instance;
@@ -224,10 +259,11 @@ class ArgumentHydrator
         $args = [];
         foreach ($constructor->getParameters() as $param) {
             $name = $param->getName();
+            $key = self::graphQLName($param);
             $paramType = $param->getType();
 
-            if (array_key_exists($name, $data)) {
-                $val = $data[$name];
+            if (array_key_exists($key, $data)) {
+                $val = $data[$key];
                 $args[$name] = $this->castValueToType($val, $paramType);
             } elseif ($param->isDefaultValueAvailable()) {
                 $args[$name] = $param->getDefaultValue();
@@ -241,6 +277,16 @@ class ArgumentHydrator
         return $refClass->newInstanceArgs($args);
     }
 
+    /**
+     * The input field name: #[Field(name: ...)] when given, else the PHP name.
+     */
+    private static function graphQLName(ReflectionParameter|\ReflectionProperty $member): string
+    {
+        $attrs = $member->getAttributes(\Typic\Attribute\Field::class);
+
+        return ($attrs !== [] ? $attrs[0]->newInstance()->name : null) ?? $member->getName();
+    }
+
     private function castValueToType(mixed $val, ?\ReflectionType $type): mixed
     {
         if ($val === null || !$type instanceof ReflectionNamedType || $type->isBuiltin()) {
@@ -248,6 +294,15 @@ class ArgumentHydrator
         }
 
         $className = $type->getName();
+
+        if ($val instanceof $className) {
+            return $val;
+        }
+
+        // Scalars arrive as DateTimeImmutable; a parameter typed DateTime gets a mutable copy
+        if ($className === \DateTime::class && $val instanceof \DateTimeImmutable) {
+            return \DateTime::createFromImmutable($val);
+        }
 
         // BackedEnum hydration
         if (is_subclass_of($className, \BackedEnum::class)) {
@@ -295,29 +350,7 @@ class ArgumentHydrator
             }
         }
 
-        // Check container
-        if ($this->container !== null && $this->container->has($loaderClass)) {
-            $loader = $this->container->get($loaderClass);
-        } else {
-            $ref = new ReflectionClass($loaderClass);
-            $constructor = $ref->getConstructor();
-            if ($constructor !== null && !empty($constructor->getParameters())) {
-                $args = [];
-                foreach ($constructor->getParameters() as $p) {
-                    $pType = $p->getType();
-                    if ($pType instanceof ReflectionNamedType && $this->container !== null && $this->container->has($pType->getName())) {
-                        $args[] = $this->container->get($pType->getName());
-                    } elseif ($p->isDefaultValueAvailable()) {
-                        $args[] = $p->getDefaultValue();
-                    } else {
-                        $args[] = null;
-                    }
-                }
-                $loader = $ref->newInstanceArgs($args);
-            } else {
-                $loader = new $loaderClass();
-            }
-        }
+        $loader = $this->instantiator->create($loaderClass);
 
         if ($context instanceof Context) {
             $loaders = $context->get('__dataloaders', []);

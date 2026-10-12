@@ -22,4 +22,13 @@ interface HttpServerInterface
      * @return $this
      */
     public function onRequest(callable $handler): self;
+
+    /**
+     * Register what checks each WebSocket upgrade request: it returns the request to accept
+     * the upgrade (resolvers then see it as the connection's request), or a response to refuse it.
+     *
+     * @param callable(ServerRequestInterface): (ServerRequestInterface|ResponseInterface) $handler
+     * @return $this
+     */
+    public function onHandshake(callable $handler): self;
 }

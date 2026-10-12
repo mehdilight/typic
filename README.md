@@ -401,6 +401,131 @@ Unknown classes or group names, and groups that include themselves, fail when th
 
 ---
 
+### 9. HTTP Middleware and CORS
+
+PSR-15 middleware runs in registration order, first outermost, around HTTP requests and WebSocket upgrades. CORS preflight requests are handled before middleware. Classes come from your container, or are constructed using dependencies it provides:
+
+```php
+use Typic\Attribute\FromRequest;
+
+$server = Typic::builder()
+    ->withMiddleware(new TokenAuthentication($users), RequestLogger::class)
+    ->withCors(origins: ['https://app.example.com'], credentials: true)
+    ->build();
+
+// TokenAuthentication sets $request->withAttribute('user', $user)
+#[Query]
+public function me(#[FromRequest('user')] ?User $user): ?User
+{
+    return $user;
+}
+```
+
+The default CORS policy allows any origin **without credentials**. Cookies require an explicit origin list; wildcard origins with credentials are rejected. The origin list also checks browser WebSocket upgrades. Use `withCors(false)` to disable CORS handling. Mutations over GET return 405. Non-JSON POST requests require a non-empty `GraphQL-Require-Preflight` or `Apollo-Require-Preflight` header by default; `withCsrfProtection(false)` explicitly disables that check.
+
+### 10. Interfaces, Unions and Scalars
+
+Mark a PHP interface or abstract class with `#[InterfaceType]`, and its methods with `#[Field]`. Object types inherit those field definitions. Use `#[UnionType(types: [Cat::class, Dog::class])]` on a class or interface to define a union. Return the concrete PHP objects; Typic resolves their GraphQL types. Register all concrete types or include them in your scanned directories.
+
+`DateTimeInterface`, `DateTimeImmutable` and `DateTime` map to the built-in `DateTime` scalar. Inputs require an ISO 8601 timestamp with a timezone, such as `2026-10-12T10:00:00+00:00`. Resolvers receive the PHP date type they ask for.
+
+For your own value objects, implement `ScalarValue`:
+
+```php
+use Typic\Attribute\Scalar;
+use Typic\Scalar\ScalarValue;
+
+#[Scalar(description: 'An email address')]
+final readonly class Email implements ScalarValue
+{
+    public function __construct(public string $value) {}
+
+    public static function parse(mixed $value): static
+    {
+        if (!is_string($value) || filter_var($value, FILTER_VALIDATE_EMAIL) === false) {
+            throw new InvalidArgumentException('Invalid email address.');
+        }
+        return new self($value);
+    }
+
+    public function serialize(): string { return $this->value; }
+}
+```
+
+Use `Email` as a resolver argument, input property or return type. For classes from another package, implement `Typic\Scalar\ScalarType` (`name()`, `description()`, `parse()`, `serialize()`) and register it with `withScalar(Uuid::class, new UuidScalar())`. Scalar parse rejection messages are visible to clients; keep them suitable for public display.
+
+### 11. Input Validation and Uploads
+
+Rules are PHP attributes on resolver parameters or input properties. Typic checks arguments after resolver middleware changes them and before hydration or resolver execution. All violations appear under `errors[].extensions.validation`, keyed by paths such as `input.address.city` or `input.tags.2`.
+
+```php
+use Typic\Validation as Assert;
+
+#[InputType]
+final readonly class SignupInput
+{
+    public function __construct(
+        #[Assert\NotBlank] #[Assert\Length(max: 32)] public string $name,
+        #[Assert\Email] public string $email,
+        #[Assert\Range(min: 13)] public int $age,
+        #[Field(arrayOf: 'string')]
+        #[Assert\Distinct(ignoreCase: true)]
+        #[Assert\Each(new Assert\Length(max: 20))] public array $tags = [],
+    ) {}
+}
+```
+
+Other rules include `Url`, `Pattern`, `OneOf`, `NotOneOf`, `Alpha`, `AlphaNum`, `AlphaDash`, `Uuid`, `Ip`, `Json`, `Timezone`, `HexColor`, `MultipleOf`, `Same`, `Different`, `RequiredIf`, `RequiredUnless`, `RequiredWith`, `RequiredWithout`, `Before` and `After`. Ordinary rules skip null; implicit rules such as `NotBlank` and conditional required rules check it. Dependent rules refer to sibling GraphQL field names, including renamed fields. Nested inputs and lists are validated recursively. Custom attribute classes can implement `Rule` or `DependentRule`; implement `ImplicitRule` too when missing values must be checked.
+
+For files, type arguments or input properties as `Psr\Http\Message\UploadedFileInterface`. Clients send the [GraphQL multipart request format](https://github.com/jaydenseric/graphql-multipart-request-spec), with `operations`, `map`, and file parts, plus the preflight header above. File lists use `#[Arg(arrayOf: UploadedFileInterface::class)]`. One file can map to several null placeholders; batched operations are currently unsupported.
+
+```php
+#[Mutation]
+public function avatar(
+    #[Assert\MaxFileSize(2 * 1024 * 1024)]
+    #[Assert\MimeType('image/png', 'image/jpeg')]
+    UploadedFileInterface $file,
+): bool {
+    $file->moveTo('/srv/uploads/' . bin2hex(random_bytes(16)));
+    return true;
+}
+```
+
+`MimeType` checks the file content and requires PHP's fileinfo extension. `Upload` is intended for inputs. Workerman converts multipart files to PSR-7; under another HTTP host, provide a PSR-7 request with parsed form data and uploaded files.
+
+### 12. Deployment Settings and Subscription Lifecycle
+
+```php
+use Typic\Subscription\SubscriptionOptions;
+
+$server = Typic::builder()
+    ->scanDirectories([__DIR__ . '/GraphQL'])
+    ->withCache(__DIR__ . '/var/typic')
+    ->withQueryLimits(maxDepth: 8, maxComplexity: 200)
+    ->withIntrospection(false)
+    ->withMaxRequestSize(1024 * 1024)
+    ->withLogger($psr3Logger)
+    ->withSubscriptions(options: new SubscriptionOptions(
+        keepAlive: 30,
+        connectionInitTimeout: 5,
+        maxSubscriptionsPerConnection: 100,
+        onConnectionInit: static fn (array $params, $request): bool => $tokens->valid($params['token'] ?? null),
+    ))
+    ->build();
+```
+
+`withCache()` caches directory discovery in a PHP file, and types compile lazily. It does **not** serialize the compiled schema. Clear the cache on deployment; leave it off during development. Missing required resolver or loader constructor dependencies fail during schema building with the class and parameter named. Container-provided objects remain the container's responsibility.
+
+Depth follows graphql-php's convention: root fields start at 0, and scalar leaf fields do not add a level. Complexity counts fields, rather than estimating returned list sizes. Limits apply to direct execution, HTTP and subscriptions. Introspection controls `__schema` and `__type`; `__typename` remains available. Explorers and code generators need introspection. The request size limit rejects oversized HTTP bodies with 413 and WebSocket messages with close code 1009, after receipt; transport-level buffering limits should also be configured in your host.
+
+A PSR-3 logger receives unexpected execution, middleware, handshake and subscription failures with exception, field path and operation context where available. Client-safe errors, validation failures and syntax errors are excluded. Internal exception details remain hidden unless debug mode is enabled.
+
+Workerman checks connection deadlines every second. Clients must send `connection_init` within the configured timeout; the hook can refuse it with `false` (4403). Clients answer heartbeat pings with pong; connections silent for two keepalive intervals are closed and their subscriptions removed. Set `keepAlive: 0` to disable heartbeat checks. Duplicate initialization, subscriptions before acknowledgment, duplicate active IDs and malformed messages close with the corresponding graphql-transport-ws code. Completing an operation frees its slot.
+
+Custom drivers can implement `Typic\Subscription\Driver\TickAwareInterface` to invoke the handler every second, or call `getProtocolHandler()->tick()` from their event loop. Subscription resolver middleware still runs at subscribe time and for every event; `connectionParams()` exposes initialization data.
+
+---
+
 ## Testing & Quality
 
 Typic is tested with PHPUnit and verified with PHPStan at **Level 8**:

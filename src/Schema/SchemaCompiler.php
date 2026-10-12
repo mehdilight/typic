@@ -4,15 +4,21 @@ declare(strict_types=1);
 
 namespace Typic\Schema;
 
+use GraphQL\Error\Error;
+use GraphQL\Language\AST\Node;
+use GraphQL\Type\Definition\CustomScalarType;
 use GraphQL\Type\Definition\EnumType;
 use GraphQL\Type\Definition\InputObjectField;
 use GraphQL\Type\Definition\InputObjectType;
+use GraphQL\Type\Definition\InterfaceType;
 use GraphQL\Type\Definition\NamedType;
 use GraphQL\Type\Definition\NullableType;
 use GraphQL\Type\Definition\ObjectType;
 use GraphQL\Type\Definition\ResolveInfo;
 use GraphQL\Type\Definition\Type;
+use GraphQL\Type\Definition\UnionType;
 use GraphQL\Type\Schema;
+use GraphQL\Utils\AST;
 use InvalidArgumentException;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
@@ -28,12 +34,15 @@ use Typic\Attribute\FromCall;
 use Typic\Attribute\Field as FieldAttr;
 use Typic\Attribute\ID;
 use Typic\Attribute\InputType as InputTypeAttr;
+use Typic\Attribute\InterfaceType as InterfaceTypeAttr;
 use Typic\Attribute\Mutation as MutationAttr;
 use Typic\Attribute\ObjectType as ObjectTypeAttr;
 use Typic\Attribute\Payload as PayloadAttr;
 use Typic\Attribute\Query as QueryAttr;
 use Typic\Attribute\ResolveField as ResolveFieldAttr;
+use Typic\Attribute\Scalar as ScalarAttr;
 use Typic\Attribute\Subscription as SubscriptionAttr;
+use Typic\Attribute\UnionType as UnionTypeAttr;
 use Typic\Context;
 use Typic\DataLoader\DataLoader;
 use Typic\DataLoader\FiberResolver;
@@ -44,7 +53,13 @@ use Typic\Pagination\Connection;
 use Typic\Pagination\PageInfo;
 use Typic\Pagination\Paginator;
 use Typic\Pagination\PaginatorInfo;
+use Typic\Scalar\DateTimeScalar;
+use Typic\Scalar\ScalarType;
+use Typic\Scalar\ScalarValue;
+use Typic\Scalar\ValueObjectScalar;
 use Typic\Subscription\SubscriptionSignal;
+use Typic\Validation\Validator;
+use Throwable;
 use UnitEnum;
 
 class SchemaCompiler
@@ -52,6 +67,8 @@ class SchemaCompiler
     private TypeRegistry $typeRegistry;
     private ArgumentHydrator $argumentHydrator;
     private MiddlewareStack $middleware;
+    private Instantiator $instantiator;
+    private Validator $validator;
 
     /**
      * @var array<class-string, object>
@@ -66,9 +83,13 @@ class SchemaCompiler
     /** @var array<string, bool> Whether each resolver method takes a DataLoader parameter */
     private array $usesDataLoader = [];
 
+    /** @var array<class-string, ScalarType> PHP type => scalar */
+    private array $scalars;
+
     /**
      * @param array<class-string|object> $resolvers
      * @param array<class-string> $types
+     * @param array<class-string, ScalarType> $scalars Custom scalars by PHP type, on top of DateTime
      */
     public function __construct(
         private array $resolvers = [],
@@ -77,10 +98,17 @@ class SchemaCompiler
         ?TypeRegistry $typeRegistry = null,
         ?ArgumentHydrator $argumentHydrator = null,
         ?MiddlewareStack $middleware = null,
+        array $scalars = [],
     ) {
+        $this->scalars = $scalars + [
+            \DateTimeInterface::class => new DateTimeScalar(),
+            \Psr\Http\Message\UploadedFileInterface::class => new \Typic\Scalar\UploadScalar(),
+        ];
         $this->typeRegistry = $typeRegistry ?? new TypeRegistry();
         $this->argumentHydrator = $argumentHydrator ?? new ArgumentHydrator($this->container);
         $this->middleware = $middleware ?? new MiddlewareStack(container: $this->container);
+        $this->instantiator = new Instantiator($this->container);
+        $this->validator = new Validator();
     }
 
     /**
@@ -129,8 +157,52 @@ class SchemaCompiler
             'query' => $queryType,
             'mutation' => $mutationType,
             'subscription' => $subscriptionType,
-            'types' => fn (): array => array_values($this->typeRegistry->all()),
+            // Types load by name as queries need them, so a query only builds the fields it touches
+            'typeLoader' => fn (string $name): (Type&NamedType)|null => $this->loadType($name),
+            'types' => fn (): array => array_values($this->allTypes()),
+            // Typic never replaces Int, String, etc.; saying so keeps graphql-php from loading every type to check
+            'scalarOverrides' => [],
         ]);
+    }
+
+    private function loadType(string $name): (Type&NamedType)|null
+    {
+        if (!$this->typeRegistry->has($name)) {
+            // Not reached yet: build every type's fields, which compiles everything they reference
+            $this->allTypes();
+        }
+
+        return $this->typeRegistry->has($name) ? $this->typeRegistry->get($name) : null;
+    }
+
+    /**
+     * Every type, after building fields until no new type appears.
+     *
+     * @return array<string, Type&NamedType>
+     */
+    private function allTypes(): array
+    {
+        $built = [];
+        do {
+            $before = count($this->typeRegistry->all());
+            foreach ($this->typeRegistry->all() as $name => $type) {
+                if (isset($built[$name])) {
+                    continue;
+                }
+                $built[$name] = true;
+                if ($type instanceof ObjectType || $type instanceof InterfaceType || $type instanceof InputObjectType) {
+                    $type->getFields();
+                }
+                if ($type instanceof UnionType) {
+                    $type->getTypes();
+                }
+                if ($type instanceof ObjectType || $type instanceof InterfaceType) {
+                    $type->getInterfaces();
+                }
+            }
+        } while (count($this->typeRegistry->all()) > $before);
+
+        return $this->typeRegistry->all();
     }
 
     private function indexResolvers(): void
@@ -151,6 +223,7 @@ class SchemaCompiler
                     $fieldName = $instance->name ?? $method->getName();
                     $target = $instance->target;
 
+                    $this->checkResolver($ref, $method);
                     $this->externalFieldResolvers[$target][$fieldName] = [
                         'class' => $className,
                         'method' => $method,
@@ -187,6 +260,7 @@ class SchemaCompiler
                 $fieldType = $this->determineReturnType($method, $attr->arrayOf, $attr->type, $attr->nullable);
                 $argsConfig = $this->buildArgumentsConfig($method);
                 $stack = $this->middleware->for($ref, $method);
+                $this->checkResolver($ref, $method);
 
                 $fields[$fieldName] = [
                     'name' => $fieldName,
@@ -230,6 +304,11 @@ class SchemaCompiler
         assert(class_exists($className) || interface_exists($className) || enum_exists($className));
         $ref = new ReflectionClass($className);
 
+        $scalar = $this->scalarFor($ref);
+        if ($scalar !== null) {
+            return $this->compileScalar($scalar, $className);
+        }
+
         // Enum check
         if (is_subclass_of($className, UnitEnum::class)) {
             $enumRef = new ReflectionClass($className);
@@ -241,8 +320,86 @@ class SchemaCompiler
             return $this->compileInputObjectType($ref);
         }
 
+        if (!empty($ref->getAttributes(UnionTypeAttr::class))) {
+            return $this->compileUnionType($ref);
+        }
+
+        if (!empty($ref->getAttributes(InterfaceTypeAttr::class))) {
+            return $this->compileInterfaceType($ref);
+        }
+
+        // Check method loader dependencies without forcing lazy GraphQL fields to compile.
+        foreach ($ref->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            if ($this->fieldDeclaration($ref, $method) !== null) {
+                $this->checkLoaderParameters($method);
+            }
+        }
+
         // ObjectType (explicit or implicit)
         return $this->compileObjectType($ref);
+    }
+
+    /**
+     * @param ReflectionClass<object> $ref
+     */
+    private function scalarFor(ReflectionClass $ref): ?ScalarType
+    {
+        foreach ($this->scalars as $phpType => $scalar) {
+            if (is_a($ref->getName(), $phpType, true)) {
+                return $scalar;
+            }
+        }
+
+        $attrs = $ref->getAttributes(ScalarAttr::class);
+        if ($attrs === []) {
+            return null;
+        }
+        if (!$ref->implementsInterface(ScalarValue::class)) {
+            throw new InvalidArgumentException(sprintf('%s has #[Scalar] but does not implement %s.', $ref->getName(), ScalarValue::class));
+        }
+
+        $attr = $attrs[0]->newInstance();
+        /** @var class-string<ScalarValue> $class */
+        $class = $ref->getName();
+
+        return new ValueObjectScalar($class, $attr->name ?? $ref->getShortName(), $attr->description);
+    }
+
+    /**
+     * @param class-string $className
+     */
+    private function compileScalar(ScalarType $scalar, string $className): CustomScalarType
+    {
+        if ($this->typeRegistry->has($scalar->name())) {
+            $existing = $this->typeRegistry->get($scalar->name());
+            if ($existing instanceof CustomScalarType) {
+                $this->typeRegistry->mapClass($className, $scalar->name());
+                return $existing;
+            }
+        }
+
+        // Errors from parse() become GraphQL errors, which show their message to the client
+        $parse = static function (mixed $value) use ($scalar): mixed {
+            try {
+                return $scalar->parse($value);
+            } catch (Error $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                // Without the original exception as "previous", so graphql-php treats the message as safe to show
+                throw new Error($e->getMessage());
+            }
+        };
+
+        $type = new CustomScalarType([
+            'name' => $scalar->name(),
+            'description' => $scalar->description(),
+            'serialize' => static fn (mixed $value): mixed => $scalar->serialize($value),
+            'parseValue' => $parse,
+            'parseLiteral' => static fn (Node $node, ?array $variables = null): mixed => $parse(AST::valueFromASTUntyped($node, $variables)),
+        ]);
+        $this->typeRegistry->register($type, $className);
+
+        return $type;
     }
 
     /**
@@ -334,10 +491,10 @@ class SchemaCompiler
             }
         }
 
-        // Also check regular properties
+        // Also check regular properties (promoted ones were handled with the constructor)
         foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
             $pName = $prop->getName();
-            if (isset($fields[$pName])) {
+            if ($prop->isPromoted() || isset($fields[$pName])) {
                 continue;
             }
 
@@ -379,11 +536,143 @@ class SchemaCompiler
             'name' => $name,
             'description' => $description,
             'fields' => fn (): array => $this->buildObjectFields($ref),
+            'interfaces' => fn (): array => $this->interfacesOf($ref),
         ]);
 
         $this->typeRegistry->register($objectType, $ref->getName());
 
         return $objectType;
+    }
+
+    /**
+     * An interface from a PHP interface or abstract class with #[InterfaceType]. Its fields are
+     * its #[Field] methods and public properties; object types inherit them.
+     *
+     * @param ReflectionClass<object> $ref
+     */
+    private function compileInterfaceType(ReflectionClass $ref): InterfaceType
+    {
+        $attr = $ref->getAttributes(InterfaceTypeAttr::class)[0]->newInstance();
+
+        $interfaceType = new InterfaceType([
+            'name' => $attr->name ?? $ref->getShortName(),
+            'description' => $this->extractDescription($ref, $attr->description),
+            'fields' => fn (): array => $this->buildObjectFields($ref),
+            'interfaces' => fn (): array => $this->interfacesOf($ref),
+            'resolveType' => fn (mixed $value): ObjectType => $this->objectTypeOf($value),
+        ]);
+
+        $this->typeRegistry->register($interfaceType, $ref->getName());
+
+        return $interfaceType;
+    }
+
+    /**
+     * A union from a class or interface with #[UnionType(types: [...])].
+     *
+     * @param ReflectionClass<object> $ref
+     */
+    private function compileUnionType(ReflectionClass $ref): UnionType
+    {
+        $attr = $ref->getAttributes(UnionTypeAttr::class)[0]->newInstance();
+
+        $unionType = new UnionType([
+            'name' => $attr->name ?? $ref->getShortName(),
+            'description' => $this->extractDescription($ref, $attr->description),
+            'types' => fn (): array => array_map(
+                function (string $member) use ($ref): ObjectType {
+                    $type = $this->resolveTypeFromClass($member);
+                    if (!$type instanceof ObjectType) {
+                        throw new InvalidArgumentException(sprintf('Union %s lists %s, which is not an object type.', $ref->getName(), $member));
+                    }
+                    return $type;
+                },
+                $attr->types,
+            ),
+            'resolveType' => fn (mixed $value): ObjectType => $this->objectTypeOf($value),
+        ]);
+
+        $this->typeRegistry->register($unionType, $ref->getName());
+
+        return $unionType;
+    }
+
+    /**
+     * The GraphQL interfaces a class implements: every ancestor with #[InterfaceType].
+     *
+     * @param ReflectionClass<object> $ref
+     * @return list<InterfaceType>
+     */
+    private function interfacesOf(ReflectionClass $ref): array
+    {
+        $interfaces = [];
+        foreach ($this->ancestors($ref) as $ancestor) {
+            if ($ancestor->getAttributes(InterfaceTypeAttr::class) !== []) {
+                $type = $this->resolveTypeFromClass($ancestor->getName());
+                if ($type instanceof InterfaceType) {
+                    $interfaces[] = $type;
+                }
+            }
+        }
+
+        return $interfaces;
+    }
+
+    /**
+     * Parent classes and interfaces, nearest first.
+     *
+     * @param ReflectionClass<object> $ref
+     * @return list<ReflectionClass<object>>
+     */
+    private function ancestors(ReflectionClass $ref): array
+    {
+        $ancestors = [];
+        for ($parent = $ref->getParentClass(); $parent !== false; $parent = $parent->getParentClass()) {
+            $ancestors[] = $parent;
+        }
+
+        return [...$ancestors, ...array_values($ref->getInterfaces())];
+    }
+
+    /**
+     * The object type of a value returned for an interface or union field.
+     */
+    private function objectTypeOf(mixed $value): ObjectType
+    {
+        $class = is_object($value) ? $value::class : get_debug_type($value);
+        $type = is_object($value) && $this->typeRegistry->hasClass($value::class)
+            ? $this->typeRegistry->getByClass($value::class)
+            : null;
+
+        if (!$type instanceof ObjectType) {
+            throw new InvalidArgumentException("{$class} is not a GraphQL type. Add #[ObjectType] to it and register or scan it.");
+        }
+
+        return $type;
+    }
+
+    /**
+     * The method that carries a method's #[Field]: the method itself, or the method it
+     * implements or overrides, so implementations need not repeat the attribute.
+     *
+     * @param ReflectionClass<object> $ref
+     */
+    private function fieldDeclaration(ReflectionClass $ref, ReflectionMethod $method): ?ReflectionMethod
+    {
+        if ($method->getAttributes(FieldAttr::class) !== []) {
+            return $method;
+        }
+
+        foreach ($this->ancestors($ref) as $ancestor) {
+            if ($ancestor->hasMethod($method->getName())) {
+                $declared = $ancestor->getMethod($method->getName());
+                if ($declared->getAttributes(FieldAttr::class) !== []) {
+                    return $declared;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -423,18 +712,17 @@ class SchemaCompiler
             ];
         }
 
-        // 2. Class Methods with #[Field]
+        // 2. Class Methods with #[Field], declared here or on an interface or parent class
         foreach ($ref->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
-            $fieldAttrs = $method->getAttributes(FieldAttr::class);
-            if (empty($fieldAttrs)) {
+            $declaration = $this->fieldDeclaration($ref, $method);
+            if ($declaration === null) {
                 continue;
             }
 
-            /** @var FieldAttr $fieldAttr */
-            $fieldAttr = $fieldAttrs[0]->newInstance();
+            $fieldAttr = $declaration->getAttributes(FieldAttr::class)[0]->newInstance();
             $methodName = $method->getName();
             $fieldName = $fieldAttr->name ?? $methodName;
-            $isId = !empty($method->getAttributes(ID::class));
+            $isId = !empty($declaration->getAttributes(ID::class));
 
             $type = $this->determineReturnType($method, $fieldAttr->arrayOf, $fieldAttr->type, $fieldAttr->nullable, $isId);
             $argsConfig = $this->buildArgumentsConfig($method);
@@ -443,8 +731,8 @@ class SchemaCompiler
             $fields[$fieldName] = [
                 'name' => $fieldName,
                 'type' => $type,
-                'description' => $this->extractDescription($method, $fieldAttr->description),
-                'deprecationReason' => $this->extractDeprecationReason($method, $fieldAttr->deprecationReason),
+                'description' => $this->extractDescription($declaration, $fieldAttr->description),
+                'deprecationReason' => $this->extractDeprecationReason($declaration, $fieldAttr->deprecationReason),
                 'args' => $argsConfig,
                 'resolve' => function ($source, array $args, $context, ResolveInfo $info) use ($method, $stack) {
                     if (!is_object($source)) {
@@ -505,9 +793,12 @@ class SchemaCompiler
         ?string $sourceClass = null,
     ): mixed {
         $resolve = function (?ResolverCall $call) use ($method, $target, $source, $args, $context, $info, $sourceClass): mixed {
+            $args = $call?->args() ?? $args;
+            $this->validator->validate($method, $args);
+
             $resolvedArgs = $this->argumentHydrator->resolveArguments(
                 $method,
-                $call?->args() ?? $args,
+                $args,
                 $source,
                 $context,
                 $info,
@@ -566,6 +857,7 @@ class SchemaCompiler
 
             if (!empty($param->getAttributes('Typic\Attribute\Context')) ||
                 !empty($param->getAttributes(FromCall::class)) ||
+                !empty($param->getAttributes(\Typic\Attribute\FromRequest::class)) ||
                 !empty($param->getAttributes('Typic\Attribute\Info')) ||
                 !empty($param->getAttributes('Typic\Attribute\Inject')) ||
                 !empty($param->getAttributes(PayloadAttr::class)) ||
@@ -1020,39 +1312,30 @@ class SchemaCompiler
      */
     private function resolveResolverInstance(string $className): object
     {
-        if (isset($this->instantiatedResolvers[$className])) {
-            return $this->instantiatedResolvers[$className];
+        return $this->instantiatedResolvers[$className] ??= $this->instantiator->create($className);
+    }
+
+    /**
+     * Fail the build when a resolver, or a DataLoader one of its methods takes, cannot be created.
+     *
+     * @param ReflectionClass<object> $ref
+     */
+    private function checkResolver(ReflectionClass $ref, ReflectionMethod $method): void
+    {
+        if (!isset($this->instantiatedResolvers[$ref->getName()])) {
+            $this->instantiator->check($ref->getName());
         }
 
-        if ($this->container !== null && $this->container->has($className)) {
-            $instance = $this->container->get($className);
-            $this->instantiatedResolvers[$className] = $instance;
-            return $instance;
-        }
+        $this->checkLoaderParameters($method);
+    }
 
-        $ref = new ReflectionClass($className);
-        $constructor = $ref->getConstructor();
-        if ($constructor === null || empty($constructor->getParameters())) {
-            $instance = new $className();
-            $this->instantiatedResolvers[$className] = $instance;
-            return $instance;
-        }
-
-        $args = [];
-        foreach ($constructor->getParameters() as $p) {
-            $pType = $p->getType();
-            if ($pType instanceof ReflectionNamedType && $this->container !== null && $this->container->has($pType->getName())) {
-                $args[] = $this->container->get($pType->getName());
-            } elseif ($p->isDefaultValueAvailable()) {
-                $args[] = $p->getDefaultValue();
-            } else {
-                $args[] = null;
+    private function checkLoaderParameters(ReflectionMethod $method): void
+    {
+        foreach ($method->getParameters() as $param) {
+            $type = $param->getType();
+            if ($type instanceof ReflectionNamedType && is_subclass_of($type->getName(), DataLoader::class)) {
+                $this->instantiator->check($type->getName());
             }
         }
-
-        $instance = $ref->newInstanceArgs($args);
-        $this->instantiatedResolvers[$className] = $instance;
-
-        return $instance;
     }
 }

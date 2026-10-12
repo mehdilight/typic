@@ -215,7 +215,7 @@ class TypicTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $this->assertStringContainsString('application/json', $response->getHeaderLine('Content-Type'));
         $this->assertSame('*', $response->getHeaderLine('Access-Control-Allow-Origin'));
-        $this->assertSame('true', $response->getHeaderLine('Access-Control-Allow-Credentials'));
+        $this->assertFalse($response->hasHeader('Access-Control-Allow-Credentials'));
 
         $body = json_decode((string) $response->getBody(), true);
         $this->assertCount(3, $body['data']['posts']);
@@ -238,7 +238,7 @@ class TypicTest extends TestCase
         ]);
         $optionsResponse = $server->handle($optionsRequest);
         $this->assertSame(204, $optionsResponse->getStatusCode());
-        $this->assertSame('https://studio.apollographql.com', $optionsResponse->getHeaderLine('Access-Control-Allow-Origin'));
+        $this->assertSame('*', $optionsResponse->getHeaderLine('Access-Control-Allow-Origin'));
         $this->assertStringContainsString('POST', $optionsResponse->getHeaderLine('Access-Control-Allow-Methods'));
         $this->assertStringContainsString('apollo-require-preflight', $optionsResponse->getHeaderLine('Access-Control-Allow-Headers'));
 

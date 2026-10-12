@@ -43,7 +43,7 @@ class LiveServerTest extends TestCase
         ];
     }
 
-    private function startServer(bool $redis, int $workers): void
+    private function startServer(bool $redis, int $workers, int $keepAlive = 30): void
     {
         if ($redis) {
             try {
@@ -69,6 +69,7 @@ class LiveServerTest extends TestCase
                 'TYPIC_RUNTIME_DIR' => $this->runtimeDir,
                 'TYPIC_REDIS_PREFIX' => $this->redisPrefix ?? '',
                 'TYPIC_WORKERS' => (string) $workers,
+                'TYPIC_KEEPALIVE' => (string) $keepAlive,
             ]),
         );
         $this->assertIsResource($process);
@@ -173,6 +174,43 @@ class LiveServerTest extends TestCase
         $this->assertSame('next', $event['type']);
         $this->assertSame('psst', $event['payload']['data']['privateMessageSent']['text']);
         fclose($member);
+    }
+
+    public function test_http_middleware_can_refuse_websocket_handshakes(): void
+    {
+        $this->startServer(redis: false, workers: 1);
+
+        $socket = stream_socket_client("tcp://127.0.0.1:{$this->port}", $errno, $errstr, 5);
+        $this->assertIsResource($socket);
+        stream_set_timeout($socket, 5);
+        fwrite($socket, "GET /graphql HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            . 'Sec-WebSocket-Key: ' . base64_encode(random_bytes(16)) . "\r\nSec-WebSocket-Version: 13\r\n"
+            . "Sec-WebSocket-Protocol: graphql-transport-ws\r\nX-Block: yes\r\n\r\n");
+
+        $response = (string) stream_get_contents($socket);
+        fclose($socket);
+        $this->assertStringStartsWith('HTTP/1.1 403', $response);
+        $this->assertStringEndsWith('Blocked', $response);
+
+        // Unflagged handshakes still upgrade
+        fclose($this->openWebSocket('/graphql'));
+    }
+
+    public function test_event_loop_sends_ping_and_transmits_idle_close_code(): void
+    {
+        $this->startServer(redis: false, workers: 1, keepAlive: 1);
+        $socket = $this->openWebSocket('/graphql');
+        $this->wsSend($socket, ['type' => 'connection_init']);
+        $this->assertSame('connection_ack', $this->wsReceive($socket)['type']);
+        $this->assertSame('ping', $this->wsReceive($socket)['type']);
+        do {
+            $header = $this->readExactly($socket, 2);
+            $payload = $this->readExactly($socket, ord($header[1]) & 0x7f);
+        } while ((ord($header[0]) & 0x0f) === 1);
+        $this->assertSame(8, ord($header[0]) & 0x0f, 'Close opcode');
+        $this->assertSame(1001, $this->unpackLength('n', substr($payload, 0, 2)));
+        $this->assertSame('Connection idle', substr($payload, 2));
+        fclose($socket);
     }
 
     private function waitForRedisSubscriber(string $channel): void

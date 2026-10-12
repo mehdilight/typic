@@ -41,7 +41,8 @@ class DirectoryScanner
                 }
 
                 $ref = new ReflectionClass($class);
-                if ($ref->isAbstract()) {
+                $isAbstractType = $ref->getAttributes(InterfaceType::class) !== [] || $ref->getAttributes(UnionType::class) !== [];
+                if ($ref->isAbstract() && !$isAbstractType) {
                     continue;
                 }
 
@@ -127,7 +128,7 @@ class DirectoryScanner
                 $namespace = trim($ns);
             }
 
-            if (in_array($tokens[$i][0], [T_CLASS, T_INTERFACE, T_ENUM], true)) {
+            if (in_array($tokens[$i][0], [T_CLASS, T_INTERFACE, T_ENUM], true) && !$this->isClassConstantOrAnonymous($tokens, $i)) {
                 for ($j = $i + 1; $j < $count; $j++) {
                     if (is_array($tokens[$j]) && $tokens[$j][0] === T_STRING) {
                         $className = $tokens[$j][1];
@@ -143,5 +144,24 @@ class DirectoryScanner
 
         /** @var class-string */
         return $namespace !== '' ? $namespace . '\\' . $className : $className;
+    }
+
+    /**
+     * Foo::class and `new class` also use the class keyword, but declare nothing.
+     *
+     * @param array<int, array{0: int, 1: string, 2: int}|string> $tokens
+     */
+    private function isClassConstantOrAnonymous(array $tokens, int $index): bool
+    {
+        for ($i = $index - 1; $i >= 0; $i--) {
+            $token = $tokens[$i];
+            if (is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            return is_array($token) && in_array($token[0], [T_DOUBLE_COLON, T_NEW], true);
+        }
+
+        return false;
     }
 }

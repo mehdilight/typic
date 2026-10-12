@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Typic\Subscription\Driver\Workerman;
 
 use Nyholm\Psr7\ServerRequest;
+use Nyholm\Psr7\UploadedFile;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Message\UploadedFileInterface;
 use RuntimeException;
 use Throwable;
 use Typic\Subscription\Driver\HttpServerInterface;
@@ -23,12 +25,24 @@ use Workerman\Worker;
  * With the default RedisPubSub any workerCount works. Keep it at 1 with InMemoryPubSub:
  * each worker is a separate process, so its events never reach the others.
  */
-class WorkermanDriver implements WebSocketServerInterface, HttpServerInterface
+class WorkermanDriver implements WebSocketServerInterface, HttpServerInterface, \Typic\Subscription\Driver\TickAwareInterface
 {
     private ?Worker $worker = null;
 
+    /** @var (callable(): void)|null */
+    private $tickCallback = null;
+
+    public function onTick(callable $callback): self
+    {
+        $this->tickCallback = $callback;
+        return $this;
+    }
+
     /** @var (callable(ServerRequestInterface): ResponseInterface)|null */
     private $requestHandler = null;
+
+    /** @var (callable(ServerRequestInterface): (ServerRequestInterface|ResponseInterface))|null */
+    private $handshakeHandler = null;
 
     /** @var (callable(WebSocketConnectionInterface): void)|null */
     private $onConnectCallback = null;
@@ -83,6 +97,12 @@ class WorkermanDriver implements WebSocketServerInterface, HttpServerInterface
         return $this;
     }
 
+    public function onHandshake(callable $handler): self
+    {
+        $this->handshakeHandler = $handler;
+        return $this;
+    }
+
     public function getHost(): string
     {
         return $this->host;
@@ -109,6 +129,12 @@ class WorkermanDriver implements WebSocketServerInterface, HttpServerInterface
         $this->worker->count = $this->workerCount;
         $this->worker->name = $this->workerName;
 
+        $this->worker->onWorkerStart = function (): void {
+            if ($this->tickCallback !== null) {
+                \Workerman\Timer::add(1, $this->tickCallback);
+            }
+        };
+
         $this->worker->onWebSocketConnect = function (TcpConnection $connection, WorkermanRequest $request): void {
             // Negotiate the graphql-transport-ws subprotocol
             $connection->headers = [
@@ -116,7 +142,16 @@ class WorkermanDriver implements WebSocketServerInterface, HttpServerInterface
             ];
 
             // Keep the upgrade request, so middleware can read its headers and cookies
-            $wrapped = new WorkermanConnection($connection, $this->toPsrRequest($request, $connection));
+            $handshake = $this->toPsrRequest($request, $connection);
+            if ($this->handshakeHandler !== null) {
+                $handshake = ($this->handshakeHandler)($handshake);
+                if ($handshake instanceof ResponseInterface) {
+                    $this->refuseHandshake($connection, $handshake);
+                    return;
+                }
+            }
+
+            $wrapped = new WorkermanConnection($connection, $handshake);
             $this->connections[$connection->id] = $wrapped;
 
             if ($this->onConnectCallback !== null) {
@@ -186,6 +221,20 @@ class WorkermanDriver implements WebSocketServerInterface, HttpServerInterface
     }
 
     /**
+     * Answer the upgrade request with an HTTP response instead of switching to WebSocket.
+     */
+    private function refuseHandshake(TcpConnection $connection, ResponseInterface $response): void
+    {
+        $body = (string) $response->getBody();
+        $head = sprintf("HTTP/1.1 %d %s\r\n", $response->getStatusCode(), $response->getReasonPhrase());
+        foreach ($response->withoutHeader('Content-Length')->withHeader('Connection', 'close')->getHeaders() as $name => $values) {
+            $head .= $name . ': ' . implode(', ', $values) . "\r\n";
+        }
+
+        $connection->close($head . 'Content-Length: ' . strlen($body) . "\r\n\r\n" . $body, true);
+    }
+
+    /**
      * HTTP/1.1 connections stay open unless the client asks to close; HTTP/1.0 ones only when asked to stay open.
      */
     private function keepsAlive(WorkermanRequest $request): bool
@@ -227,7 +276,44 @@ class WorkermanDriver implements WebSocketServerInterface, HttpServerInterface
         ))
             ->withQueryParams($queryParams)
             ->withCookieParams($cookies)
-            ->withParsedBody($post !== [] ? $post : null);
+            ->withParsedBody($post !== [] ? $post : null)
+            ->withUploadedFiles(self::uploadedFiles($request));
+    }
+
+    /**
+     * Workerman's $_FILES-style arrays as PSR-7 uploaded files.
+     *
+     * @return array<string, UploadedFileInterface|array<mixed>>
+     */
+    private static function uploadedFiles(WorkermanRequest $request): array
+    {
+        $files = $request->file();
+        if (!is_array($files)) {
+            return [];
+        }
+
+        $convert = static function (array $file) use (&$convert): UploadedFileInterface|array {
+            if (!isset($file['tmp_name'])) {
+                return array_map(static fn (mixed $nested): UploadedFileInterface|array => is_array($nested) ? $convert($nested) : [], $file);
+            }
+
+            return new UploadedFile(
+                (string) $file['tmp_name'],
+                (int) ($file['size'] ?? 0),
+                (int) ($file['error'] ?? UPLOAD_ERR_OK),
+                isset($file['name']) ? (string) $file['name'] : null,
+                isset($file['type']) ? (string) $file['type'] : null,
+            );
+        };
+
+        $uploaded = [];
+        foreach ($files as $name => $file) {
+            if (is_array($file)) {
+                $uploaded[(string) $name] = $convert($file);
+            }
+        }
+
+        return $uploaded;
     }
 
     public function start(): void

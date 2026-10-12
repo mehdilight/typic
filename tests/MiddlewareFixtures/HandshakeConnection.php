@@ -13,6 +13,9 @@ final class HandshakeConnection implements WebSocketConnectionInterface, Handsha
     /** @var list<array<string, mixed>> */
     public array $received = [];
 
+    /** @var array{int, string}|null */
+    public ?array $closedWith = null;
+
     public function __construct(private ?ServerRequestInterface $handshake = null)
     {
     }
@@ -31,6 +34,7 @@ final class HandshakeConnection implements WebSocketConnectionInterface, Handsha
 
     public function close(int $code = 1000, string $reason = ''): void
     {
+        $this->closedWith ??= [$code, $reason];
     }
 
     public function getHandshakeRequest(): ?ServerRequestInterface

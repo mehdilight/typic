@@ -6,6 +6,8 @@ namespace Typic\Subscription;
 
 use GraphQL\Type\Schema;
 use Psr\Container\ContainerInterface;
+use Typic\Server\ErrorReporter;
+use Typic\Server\QueryLimits;
 use Typic\Subscription\Driver\WebSocketConnectionInterface;
 use Typic\Subscription\Driver\WebSocketServerInterface;
 use Typic\Subscription\Driver\Workerman\WorkermanDriver;
@@ -26,6 +28,10 @@ class SubscriptionServer
         ?PubSubInterface $pubSub = null,
         private ?ContainerInterface $container = null,
         ?GraphqlWsHandler $handler = null,
+        ?QueryLimits $limits = null,
+        ?ErrorReporter $errors = null,
+        ?SubscriptionOptions $options = null,
+        ?int $maxMessageSize = null,
     ) {
         $this->driver = $driver ?? new WorkermanDriver();
         $this->pubSub = $pubSub ?? RedisPubSub::fromEnvironment();
@@ -35,6 +41,10 @@ class SubscriptionServer
             registry: $this->registry,
             pubSub: $this->pubSub,
             container: $this->container,
+            limits: $limits,
+            errors: $errors,
+            options: $options,
+            maxMessageSize: $maxMessageSize,
         );
 
         $this->bindDriverEvents();
@@ -42,6 +52,9 @@ class SubscriptionServer
 
     private function bindDriverEvents(): void
     {
+        if ($this->driver instanceof \Typic\Subscription\Driver\TickAwareInterface) {
+            $this->driver->onTick($this->handler->tick(...));
+        }
         $this->driver->onConnect(function (WebSocketConnectionInterface $conn): void {
             $this->handler->handleConnect($conn);
         });

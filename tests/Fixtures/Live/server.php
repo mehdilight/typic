@@ -7,6 +7,7 @@ require_once __DIR__ . '/../../../vendor/autoload.php';
 use Typic\Subscription\Driver\Workerman\WorkermanDriver;
 use Typic\Subscription\PubSub\InMemoryPubSub;
 use Typic\Subscription\PubSub\RedisPubSub;
+use Typic\Tests\Fixtures\Live\BlockFlagged;
 use Typic\Tests\Fixtures\Live\LiveMessage;
 use Typic\Tests\Fixtures\Live\LiveResolver;
 use Typic\Typic;
@@ -25,6 +26,7 @@ $pubSub = is_string($redisPrefix) && $redisPrefix !== ''
 Typic::builder()
     ->registerResolvers([LiveResolver::class])
     ->registerTypes([LiveMessage::class])
+    ->withMiddleware(new BlockFlagged())
     ->withSubscriptions(
         driver: new WorkermanDriver(
             host: '127.0.0.1',
@@ -32,6 +34,7 @@ Typic::builder()
             workerCount: (int) (getenv('TYPIC_WORKERS') ?: 1),
         ),
         pubSub: $pubSub,
+        options: new \Typic\Subscription\SubscriptionOptions(keepAlive: (float) (getenv('TYPIC_KEEPALIVE') ?: 30)),
     )
     ->build()
     ->serve();

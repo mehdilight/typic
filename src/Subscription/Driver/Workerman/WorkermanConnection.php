@@ -34,7 +34,9 @@ class WorkermanConnection implements WebSocketConnectionInterface, HandshakeAwar
 
     public function close(int $code = 1000, string $reason = ''): void
     {
-        $this->connection->close($reason);
+        // A WebSocket close frame contains a two-byte status followed by a UTF-8 reason.
+        $this->connection->websocketType = "\x88";
+        $this->connection->close(pack('n', $code) . mb_strcut($reason, 0, 123, 'UTF-8'));
     }
 
     public function getTcpConnection(): TcpConnection
