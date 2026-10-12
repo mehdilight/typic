@@ -89,6 +89,7 @@ class SchemaCompiler
     /**
      * @param array<class-string|object> $resolvers
      * @param array<class-string> $types
+     * @param (callable(class-string<DataLoader<mixed, mixed>>): DataLoader<mixed, mixed>)|null $dataLoaderFactory
      * @param array<class-string, ScalarType> $scalars Custom scalars by PHP type, on top of DateTime
      */
     public function __construct(
@@ -99,13 +100,14 @@ class SchemaCompiler
         ?ArgumentHydrator $argumentHydrator = null,
         ?MiddlewareStack $middleware = null,
         array $scalars = [],
+        private mixed $dataLoaderFactory = null,
     ) {
         $this->scalars = $scalars + [
             \DateTimeInterface::class => new DateTimeScalar(),
             \Psr\Http\Message\UploadedFileInterface::class => new \Typic\Scalar\UploadScalar(),
         ];
         $this->typeRegistry = $typeRegistry ?? new TypeRegistry();
-        $this->argumentHydrator = $argumentHydrator ?? new ArgumentHydrator($this->container);
+        $this->argumentHydrator = $argumentHydrator ?? new ArgumentHydrator($this->container, $this->dataLoaderFactory);
         $this->middleware = $middleware ?? new MiddlewareStack(container: $this->container);
         $this->instantiator = new Instantiator($this->container);
         $this->validator = new Validator();
@@ -850,7 +852,7 @@ class SchemaCompiler
                     $pTypeName === 'Typic\Subscription\PubSub\PubSubInterface' ||
                     is_subclass_of($pTypeName, 'Typic\Subscription\PubSub\PubSubInterface') ||
                     is_subclass_of($pTypeName, 'Typic\DataLoader\DataLoader') ||
-                    ($this->container !== null && $this->container->has($pTypeName))) {
+                    ($this->container !== null && !$this->isInputClass($pTypeName) && $param->getAttributes(Arg::class) === [] && $this->container->has($pTypeName))) {
                     continue;
                 }
             }
@@ -890,6 +892,17 @@ class SchemaCompiler
         }
 
         return $argsConfig;
+    }
+
+    private function isInputClass(string $class): bool
+    {
+        if (!class_exists($class) && !interface_exists($class)) {
+            return false;
+        }
+        $ref = new ReflectionClass($class);
+        return $ref->getAttributes(InputTypeAttr::class) !== []
+            || is_a($class, UnitEnum::class, true)
+            || $this->scalarFor($ref) !== null;
     }
 
     private function nonNull(Type $type): Type
@@ -1331,6 +1344,9 @@ class SchemaCompiler
 
     private function checkLoaderParameters(ReflectionMethod $method): void
     {
+        if ($this->dataLoaderFactory !== null) {
+            return;
+        }
         foreach ($method->getParameters() as $param) {
             $type = $param->getType();
             if ($type instanceof ReflectionNamedType && is_subclass_of($type->getName(), DataLoader::class)) {

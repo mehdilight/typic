@@ -68,6 +68,18 @@ class InstantiationTest extends TestCase
         Typic::builder()->registerTypes([\Typic\Tests\BuildFixtures\LoadedType::class])->build();
     }
 
+    public function test_autowiring_does_not_turn_input_dtos_into_services(): void
+    {
+        $container = new class implements ContainerInterface {
+            public function has(string $id): bool { return class_exists($id); }
+            public function get(string $id): object { return new $id(); }
+        };
+        $server = Typic::builder()->registerResolvers([\Typic\Tests\ValidationFixtures\SignupResolver::class])
+            ->withContainer($container)->build();
+        $result = $server->execute('mutation { signup(input: { username: "mehdi", email: "me@example.com", age: 30 }) }');
+        $this->assertSame(['data' => ['signup' => 'welcome mehdi (free)']], $result);
+    }
+
     /**
      * @param array<string, object> $entries
      */

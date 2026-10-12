@@ -10,7 +10,7 @@ use Typic\Subscription\PubSub\RedisPubSub;
 use Typic\Tests\Fixtures\Live\BlockFlagged;
 use Typic\Tests\Fixtures\Live\LiveMessage;
 use Typic\Tests\Fixtures\Live\LiveResolver;
-use Typic\Typic;
+use Typic\Application;
 use Workerman\Worker;
 
 $runtimeDir = (string) getenv('TYPIC_RUNTIME_DIR');
@@ -23,7 +23,8 @@ $pubSub = is_string($redisPrefix) && $redisPrefix !== ''
     ? RedisPubSub::fromUrl('redis://127.0.0.1:6379', $redisPrefix)
     : new InMemoryPubSub();
 
-Typic::builder()
+$app = new Application();
+$app->builder()
     ->registerResolvers([LiveResolver::class])
     ->registerTypes([LiveMessage::class])
     ->withMiddleware(new BlockFlagged())
@@ -35,6 +36,6 @@ Typic::builder()
         ),
         pubSub: $pubSub,
         options: new \Typic\Subscription\SubscriptionOptions(keepAlive: (float) (getenv('TYPIC_KEEPALIVE') ?: 30)),
-    )
-    ->build()
-    ->serve();
+    );
+
+$app->serve();

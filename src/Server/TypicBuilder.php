@@ -39,6 +39,9 @@ class TypicBuilder
     private array $scanDirectories = [];
 
     private ?ContainerInterface $container = null;
+
+    /** @var (callable(class-string<\Typic\DataLoader\DataLoader<mixed, mixed>>): \Typic\DataLoader\DataLoader<mixed, mixed>)|null */
+    private $dataLoaderFactory = null;
     private ?string $cacheDirectory = null;
 
     /** @var array<class-string, ScalarType> */
@@ -236,6 +239,19 @@ class TypicBuilder
     public function withScalar(string $phpType, ScalarType $scalar): self
     {
         $this->scalars[$phpType] = $scalar;
+        return $this;
+    }
+
+    /**
+     * Create a fresh loader per execution; services may remain shared in the application container.
+     * The factory owns loader construction and must return an instance of the requested class.
+     *
+     * @param callable(class-string<\Typic\DataLoader\DataLoader<mixed, mixed>>): \Typic\DataLoader\DataLoader<mixed, mixed> $factory
+     * @return $this
+     */
+    public function withDataLoaderFactory(callable $factory): self
+    {
+        $this->dataLoaderFactory = $factory;
         return $this;
     }
 
@@ -497,6 +513,7 @@ class TypicBuilder
             container: $this->container,
             middleware: new MiddlewareStack($this->resolverMiddleware, $this->middlewareGroups, $this->container),
             scalars: $this->scalars,
+            dataLoaderFactory: $this->dataLoaderFactory,
         );
 
         $schema = $compiler->compile();

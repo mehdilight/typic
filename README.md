@@ -19,7 +19,7 @@
 - **Built-in DataLoader**: Write one `batch()` method and call `$loader->get($id)` in resolvers; Typic turns N lookups into one query.
 - **Resolver Middleware**: Stack checks and transforms around resolvers with `#[Middleware]` on a method or a whole class, named groups, and global middleware. Works for queries, mutations, field resolvers, and subscriptions.
 - **First-Class Pagination**: Automatic schema generation for both offset-based (`Paginator`) and Relay cursor-based (`Connection`) pagination.
-- **PSR-7 & PSR-15 Standard Compliant**: Integrates with any modern PHP framework (Laravel, Symfony, Spiral, Slim, Mezzio) or standalone HTTP runtimes.
+- **Standalone Application Runtime**: `Typic\Application` owns PHP-DI container setup and starts the Workerman HTTP/WebSocket server. PSR-7 and PSR-15 remain the HTTP boundaries.
 - **Embedded Apollo Sandbox**: Industry-standard, visual query builder and developer explorer served automatically at `/graphql` for browser requests.
 - **Directory Scanner & Auto-Discovery**: Automatically scans your project directories and registers types, queries, mutations, and field resolvers.
 - **Strictly Typed & Refactoring Safe**: Fully compatible with PHPStan (Level 8) and IDE refactoring tools.
@@ -31,6 +31,33 @@
 ```bash
 composer require typic/typic
 ```
+
+---
+
+## Standalone Application
+
+Typic supplies the application bootstrap and default DI container. Your project supplies service definitions and GraphQL configuration:
+
+```php
+use Typic\Application;
+use Typic\Subscription\Driver\Workerman\WorkermanDriver;
+
+$app = new Application([
+    // Interfaces need a binding; concrete services autowire by constructor type.
+    UserRepository::class => DI\autowire(SqliteUserRepository::class),
+]);
+
+$app->builder()
+    ->scanDirectories([__DIR__ . '/src/GraphQL'])
+    ->withGraphiQL()
+    ->withSubscriptions(driver: new WorkermanDriver(port: 8000));
+
+$app->serve();
+```
+
+Run the entry point with `php server.php start`. `container()` exposes the shared application services; `builder()` exposes GraphQL configuration; `build()` creates a server without starting the event loop. Service factories stay lazy so database connections open after Workerman forks. Application automatically creates fresh DataLoaders per request or subscription event through PHP-DI's factory API.
+
+For another PSR-11 container, pass `new Application(container: $container, dataLoaderFactory: $factory)`. Supply bindings to that container directly. `Typic::builder()` remains available when you want to assemble the components yourself.
 
 ---
 
@@ -221,6 +248,7 @@ public function comments(Post $post, CommentsByPostLoader $comments): array
 
 Good to know:
 - **Missing keys:** keys that `batch()` does not return resolve to `null`.
+- **Containers that share instances:** use `withDataLoaderFactory($factory)` to construct fresh loaders for each execution. The factory receives the loader class and owns its construction. For PHP-DI, pass `$container->make(...)`; Typic still reuses that loader across sibling fields within the request. Input DTOs and scalars stay GraphQL arguments even when the container can autowire them.
 - **One per request:** each request gets its own loader instance, and results are cached for that request (`clear($key)` after a mutation if needed).
 - **Mistakes are caught:** returning a plain list instead of a keyed array throws an error that names the fix.
 - **More helpers:** `getMany($keys)` loads several keys at once, and `prime($key, $value)` stores a value you already have.

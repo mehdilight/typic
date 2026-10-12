@@ -97,6 +97,23 @@ class DataLoaderTest extends TestCase
         (new AuthorLoader())->get(1);
     }
 
+    public function test_loader_factory_creates_one_instance_per_execution_and_preserves_batching(): void
+    {
+        $created = [];
+        $server = Typic::builder()->registerResolvers([LibraryResolver::class])
+            ->withDataLoaderFactory(static function (string $class) use (&$created): \Typic\DataLoader\DataLoader {
+                $loader = new $class();
+                $created[] = $loader;
+                return $loader;
+            })->build();
+        $query = '{ books { author { name } } }';
+        $this->assertArrayNotHasKey('errors', $server->execute($query));
+        $this->assertArrayNotHasKey('errors', $server->execute($query));
+        $this->assertCount(2, $created);
+        $this->assertNotSame($created[0], $created[1]);
+        $this->assertSame(['authors 1,2,99', 'authors 1,2,99'], Library::$queries);
+    }
+
     private function debugServer(): TypicServer
     {
         return Typic::builder()

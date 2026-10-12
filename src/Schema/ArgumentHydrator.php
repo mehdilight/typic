@@ -29,8 +29,10 @@ class ArgumentHydrator
 {
     private Instantiator $instantiator;
 
+    /** @param (callable(class-string<DataLoader<mixed, mixed>>): DataLoader<mixed, mixed>)|null $dataLoaderFactory */
     public function __construct(
         private ?ContainerInterface $container = null,
+        private mixed $dataLoaderFactory = null,
     ) {
         $this->instantiator = new Instantiator($container);
     }
@@ -198,10 +200,6 @@ class ArgumentHydrator
                 return $this->resolveDataLoader($typeName, $context);
             }
 
-            // Check if parameter is a service in container
-            if ($this->container !== null && $this->container->has($typeName)) {
-                return $this->container->get($typeName);
-            }
         }
 
         // 4. Resolve from GraphQL arguments ($args)
@@ -218,6 +216,14 @@ class ArgumentHydrator
         if (array_key_exists($argName, $args)) {
             $rawVal = $args[$argName];
             return $this->castValueToType($rawVal, $type);
+        }
+
+        // Only parameters absent from the GraphQL schema are service dependencies.
+        // Autowiring containers may report that input DTOs and scalars are constructible too.
+        if ($type instanceof ReflectionNamedType && $this->container !== null
+            && $info->parentType->getField($info->fieldName)->getArg($argName) === null
+            && $this->container->has($type->getName())) {
+            return $this->container->get($type->getName());
         }
 
         // Default value if parameter wasn't provided
@@ -350,7 +356,12 @@ class ArgumentHydrator
             }
         }
 
-        $loader = $this->instantiator->create($loaderClass);
+        $loader = $this->dataLoaderFactory !== null
+            ? ($this->dataLoaderFactory)($loaderClass)
+            : $this->instantiator->create($loaderClass);
+        if (!$loader instanceof $loaderClass) {
+            throw new LogicException("The DataLoader factory must return an instance of {$loaderClass}.");
+        }
 
         if ($context instanceof Context) {
             $loaders = $context->get('__dataloaders', []);
