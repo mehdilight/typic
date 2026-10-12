@@ -70,9 +70,11 @@ class ExplorerTest extends TestCase
         $this->assertStringContainsString('My API Altair', $html);
         $this->assertStringContainsString('<app-root>', $html);
         $this->assertStringContainsString('altair-static', $html);
-        $this->assertStringContainsString('__ALTAIR_INITIAL_OPTIONS__', $html);
-        $this->assertStringContainsString('ws://localhost:8080', $html);
-        $this->assertStringContainsString('graphql-ws', $html);
+        // Altair only boots through AltairGraphQL.init(); global option variables are ignored
+        $this->assertStringContainsString('window.AltairGraphQL.init(options)', $html);
+        $this->assertStringNotContainsString('__ALTAIR_INITIAL_OPTIONS__', $html);
+        $this->assertStringContainsString('ws:\/\/localhost:8080', json_encode($html) ?: '');
+        $this->assertStringContainsString("initialSubscriptionRequestHandlerId = 'graphql-ws'", $html);
         $this->assertStringContainsString('subscription OnEvent { test }', $html);
         // Ensure no iframe is used
         $this->assertStringNotContainsString('<iframe', $html);

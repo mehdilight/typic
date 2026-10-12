@@ -6,7 +6,7 @@ namespace Typic\Explorer;
 
 class AltairRenderer implements ExplorerInterface
 {
-    public const CDN_BASE = 'https://cdn.jsdelivr.net/npm/altair-static@8/build/dist/';
+    public const CDN_BASE = 'https://cdn.jsdelivr.net/npm/altair-static@8.5.11/build/dist/';
 
     /**
      * @param array{
@@ -22,29 +22,27 @@ class AltairRenderer implements ExplorerInterface
     public function render(string $endpoint = '/graphql', array $options = []): string
     {
         $title = htmlspecialchars((string) ($options['title'] ?? 'Typic Altair GraphQL Client'), ENT_QUOTES, 'UTF-8');
-        $endpointUrl = json_encode($endpoint, JSON_UNESCAPED_SLASHES);
 
-        $subEndpoint = $options['subscriptionEndpoint']
-            ?? ($options['initialSubscriptionEndpoint'] ?? null);
-        $subEndpointJson = $subEndpoint !== null
-            ? json_encode((string) $subEndpoint, JSON_UNESCAPED_SLASHES)
-            : 'null';
+        $altairOptions = ['initialName' => $options['title'] ?? 'Typic'];
 
-        $initialQuery = $options['initialDocument'] ?? null;
-        $initialQueryJson = $initialQuery !== null
-            ? json_encode((string) $initialQuery, JSON_UNESCAPED_SLASHES)
-            : 'null';
+        if (isset($options['initialDocument'])) {
+            $altairOptions['initialQuery'] = (string) $options['initialDocument'];
+        }
+        if (isset($options['initialVariables'])) {
+            $altairOptions['initialVariables'] = is_string($options['initialVariables'])
+                ? $options['initialVariables']
+                : (string) json_encode($options['initialVariables'], JSON_PRETTY_PRINT);
+        }
+        if (isset($options['initialHeaders'])) {
+            $altairOptions['initialHeaders'] = $options['initialHeaders'];
+        }
 
-        $initialVariables = $options['initialVariables'] ?? null;
-        $initialVariablesJson = $initialVariables !== null
-            ? (is_string($initialVariables) ? json_encode($initialVariables) : json_encode(json_encode($initialVariables, JSON_PRETTY_PRINT)))
-            : 'null';
+        $subEndpoint = $options['subscriptionEndpoint'] ?? ($options['initialSubscriptionEndpoint'] ?? null);
 
-        $initialHeaders = $options['initialHeaders'] ?? null;
-        $initialHeadersJson = $initialHeaders !== null
-            ? json_encode($initialHeaders)
-            : 'null';
-
+        $flags = JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_THROW_ON_ERROR;
+        $altairOptionsJson = json_encode((object) $altairOptions, $flags);
+        $endpointJson = json_encode($endpoint, $flags);
+        $subEndpointJson = json_encode($subEndpoint, $flags);
         $cdnBase = self::CDN_BASE;
 
         return <<<HTML
@@ -58,64 +56,59 @@ class AltairRenderer implements ExplorerInterface
     <link rel="icon" type="image/x-icon" href="favicon.ico" />
     <link href="styles.css" rel="stylesheet" />
     <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #1a1e29;
-        }
+        body { margin: 0; overflow: hidden; background-color: #1a1e29; }
+        #typic-status { display: flex; align-items: center; justify-content: center; height: 100vh; padding: 0 16px;
+            color: #fff; font-family: sans-serif; text-align: center; white-space: pre-line; }
     </style>
 </head>
 <body>
     <app-root>
-        <div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#fff;font-family:sans-serif;">
-            Loading Altair GraphQL Client...
-        </div>
+        <div id="typic-status">Loading Altair GraphQL Client...</div>
     </app-root>
 
     <script>
-        (function() {
-            var rawEndpoint = {$endpointUrl};
-            var endpoint = rawEndpoint;
-            if (rawEndpoint.startsWith('/')) {
-                endpoint = window.location.origin + rawEndpoint;
-            } else if (!rawEndpoint.startsWith('http://') && !rawEndpoint.startsWith('https://')) {
-                endpoint = window.location.origin + '/' + rawEndpoint;
+        // Shown on the page as well as in the console, since a blank loading screen says nothing
+        window.typicAltairFailed = function (message, error) {
+            console.error('[Typic] ' + message, error || '');
+            var status = document.getElementById('typic-status');
+            if (status) {
+                status.style.color = '#ff8a80';
+                status.textContent = message;
             }
-
-            var subEndpoint = {$subEndpointJson};
-            var initialQuery = {$initialQueryJson};
-            var initialVariables = {$initialVariablesJson};
-            var initialHeaders = {$initialHeadersJson};
-
-            var initialOptions = {
-                endpointURL: endpoint,
-            };
-
-            if (subEndpoint) {
-                var wsUrl = subEndpoint;
-                if (wsUrl.startsWith('/')) {
-                    var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    wsUrl = wsProto + '//' + window.location.host + wsUrl;
-                }
-                initialOptions.subscriptionsEndpoint = wsUrl;
-                initialOptions.subscriptionsProvider = 'graphql-ws';
-            }
-
-            if (initialQuery) {
-                initialOptions.initialQuery = initialQuery;
-            }
-            if (initialVariables) {
-                initialOptions.initialVariables = initialVariables;
-            }
-            if (initialHeaders) {
-                initialOptions.initialHeaders = initialHeaders;
-            }
-
-            window.__ALTAIR_INITIAL_OPTIONS__ = initialOptions;
-        })();
+        };
     </script>
-    <script type="module" src="polyfills.js"></script>
-    <script type="module" src="main.js"></script>
+    <script type="module" src="polyfills.js" onerror="typicAltairFailed('Could not load Altair from ' + this.src)"></script>
+    <script type="module" src="main.js" onerror="typicAltairFailed('Could not load Altair from ' + this.src)"></script>
+    <script type="module">
+        // <base> points at the CDN, so relative URLs must be made absolute against this page
+        function absolute(url, protocol) {
+            if (/^[a-z]+:\/\//i.test(url)) {
+                return url;
+            }
+            var path = url.startsWith('/') ? url : '/' + url;
+            return (protocol || window.location.protocol) + '//' + window.location.host + path;
+        }
+
+        var options = {$altairOptionsJson};
+        options.endpointURL = absolute({$endpointJson});
+
+        var subscriptionEndpoint = {$subEndpointJson};
+        if (subscriptionEndpoint) {
+            options.subscriptionsEndpoint = absolute(subscriptionEndpoint, window.location.protocol === 'https:' ? 'wss:' : 'ws:');
+            // Altair defaults to the legacy subscriptions-transport-ws protocol
+            options.initialSubscriptionRequestHandlerId = 'graphql-ws';
+        }
+
+        if (!window.AltairGraphQL) {
+            typicAltairFailed('Altair did not start: AltairGraphQL is not defined.');
+        } else {
+            try {
+                window.AltairGraphQL.init(options);
+            } catch (error) {
+                typicAltairFailed('Altair failed to start: ' + error.message, error);
+            }
+        }
+    </script>
 </body>
 </html>
 HTML;
