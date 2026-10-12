@@ -10,4 +10,13 @@ enum ExplorerType: string
     case Altair = 'altair';
     case Apollo = 'apollo';
     case Sandbox = 'sandbox';
+
+    public function createRenderer(): ExplorerInterface
+    {
+        return match ($this) {
+            self::GraphiQL => new GraphiQLRenderer(),
+            self::Altair => new AltairRenderer(),
+            self::Apollo, self::Sandbox => new ApolloSandboxRenderer(),
+        };
+    }
 }

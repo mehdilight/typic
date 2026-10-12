@@ -10,8 +10,8 @@ use Typic\Subscription\Driver\WebSocketConnectionInterface;
 use Typic\Subscription\Driver\WebSocketServerInterface;
 use Typic\Subscription\Driver\Workerman\WorkermanDriver;
 use Typic\Subscription\Protocol\GraphqlWsHandler;
-use Typic\Subscription\PubSub\InMemoryPubSub;
 use Typic\Subscription\PubSub\PubSubInterface;
+use Typic\Subscription\PubSub\RedisPubSub;
 
 class SubscriptionServer
 {
@@ -28,7 +28,7 @@ class SubscriptionServer
         ?GraphqlWsHandler $handler = null,
     ) {
         $this->driver = $driver ?? new WorkermanDriver();
-        $this->pubSub = $pubSub ?? new InMemoryPubSub();
+        $this->pubSub = $pubSub ?? RedisPubSub::fromEnvironment();
 
         $this->handler = $handler ?? new GraphqlWsHandler(
             schema: $this->schema,

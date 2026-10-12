@@ -14,7 +14,7 @@
 ## Features
 
 - **Zero SDL Boilerplate**: Define your schema using pure PHP classes and attributes. Types, fields, nullability, and arguments are inferred automatically.
-- **Real-Time Subscriptions**: Driver-based WebSocket subscription engine powered by Workerman, supporting standard graphql-ws protocol and interchangeable drivers.
+- **Real-Time Subscriptions**: Driver-based WebSocket subscription engine powered by Workerman, supporting the standard graphql-ws protocol, interchangeable drivers, and Redis Pub/Sub for multi-process delivery.
 - **Nested Input DTO Hydration**: Type-hint `readonly` DTO classes in your mutations; Typic recursively hydrates nested GraphQL input objects into strongly-typed PHP objects.
 - **Built-in DataLoader**: Solve N+1 query problems effortlessly with first-class batch loading and lifecycle caching.
 - **First-Class Pagination**: Automatic schema generation for both offset-based (`Paginator`) and Relay cursor-based (`Connection`) pagination.
@@ -253,7 +253,7 @@ class CommentSubscriptionResolver
 }
 ```
 
-Run with Workerman:
+Serve everything with Workerman. Queries, mutations, and subscriptions share one event loop and one port: HTTP requests to `/graphql` are answered directly, and WebSocket upgrade requests to the same URL switch to `graphql-transport-ws`.
 
 ```php
 use Typic\Subscription\Driver\Workerman\WorkermanDriver;
@@ -261,15 +261,29 @@ use Typic\Typic;
 
 $server = Typic::builder()
     ->scanDirectories([__DIR__ . '/GraphQL'])
-    ->withSubscriptions(
-        driver: new WorkermanDriver(host: '0.0.0.0', port: 8080),
-        endpoint: 'ws://localhost:8080'
-    )
+    ->withSubscriptions(driver: new WorkermanDriver(host: '0.0.0.0', port: 4000))
     ->build();
 
-// Start the Workerman event loop
-$server->getSubscriptionServer()->start();
+// HTTP: http://localhost:4000/graphql, WebSocket: ws://localhost:4000/graphql
+$server->serve();
 ```
+
+Run it with `php server.php start` (add `-d` to daemonize).
+
+Events travel through Redis by default (`REDIS_URL`, falling back to `redis://127.0.0.1:6379`, channels prefixed with `typic:`). Any number of Workerman workers, and any other PHP process that publishes through `RedisPubSub` (PHP-FPM, queue workers, CLI), reaches every subscriber. No PHP extension is needed: Typic speaks the Redis protocol directly, without blocking the event loop.
+
+```php
+use Typic\Subscription\PubSub\InMemoryPubSub;
+use Typic\Subscription\PubSub\RedisPubSub;
+
+// Custom Redis server or channel prefix
+->withSubscriptions(pubSub: RedisPubSub::fromUrl('redis://user:secret@redis.internal:6379', prefix: 'shop:'))
+
+// No Redis: single process only, so keep workerCount at 1
+->withSubscriptions(pubSub: new InMemoryPubSub())
+```
+
+Payloads are PHP-serialized so resolvers receive the published objects; only use a Redis instance you trust.
 
 ---
 
@@ -293,6 +307,8 @@ $server = Typic::builder()
     ->withSandbox()
     ->build();
 ```
+
+Any explorer can also be opened per request with `?explorer=graphiql`, `?explorer=altair`, or `?explorer=apollo`.
 
 ---
 

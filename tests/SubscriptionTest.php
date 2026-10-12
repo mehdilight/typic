@@ -10,12 +10,14 @@ use Typic\Attribute\ObjectType;
 use Typic\Attribute\Subscription;
 use Typic\Subscription\Driver\WebSocketConnectionInterface;
 use Typic\Subscription\Driver\WebSocketServerInterface;
+use Typic\Subscription\Driver\Workerman\HttpWebSocketProtocol;
 use Typic\Subscription\Driver\Workerman\WorkermanDriver;
 use Typic\Subscription\Protocol\GraphqlWsHandler;
 use Typic\Subscription\PubSub\InMemoryPubSub;
 use Typic\Subscription\SubscriptionRegistry;
 use Typic\Subscription\SubscriptionServer;
 use Typic\Typic;
+use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 #[ObjectType]
 class TestComment
@@ -281,7 +283,56 @@ class SubscriptionTest extends TestCase
         $worker = $workermanDriver->getWorker();
         $this->assertSame(4, $worker->count);
         $this->assertSame('TypicTestWorkers', $worker->name);
-        $this->assertSame('websocket://127.0.0.1:8088', $worker->getSocketName());
+        $this->assertSame('tcp://127.0.0.1:8088', $worker->getSocketName());
+        $this->assertSame(HttpWebSocketProtocol::class, $worker->protocol);
+    }
+
+    public function test_workerman_driver_serves_http_through_typic_server(): void
+    {
+        $driver = new WorkermanDriver(port: 8089);
+
+        $server = Typic::builder()
+            ->registerResolvers([TestSubscriptionResolver::class])
+            ->registerTypes([TestComment::class])
+            ->withSubscriptions(driver: $driver)
+            ->build();
+
+        // Same port serves HTTP and WebSocket, so the explorer subscribes on the HTTP path
+        $this->assertSame('/graphql', $server->getOptions()['subscriptionEndpoint']);
+
+        $body = (string) json_encode(['query' => '{ __typename }']);
+        $request = new WorkermanRequest(
+            "POST /graphql HTTP/1.1\r\n"
+            . "Host: localhost:8089\r\n"
+            . "Content-Type: application/json\r\n"
+            . 'Content-Length: ' . strlen($body) . "\r\n\r\n"
+            . $body
+        );
+
+        $response = $driver->handleHttpRequest($request);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(['data' => ['__typename' => 'Query']], json_decode($response->rawBody(), true));
+    }
+
+    public function test_explorer_can_be_switched_per_request(): void
+    {
+        $server = Typic::builder()
+            ->registerResolvers([TestSubscriptionResolver::class])
+            ->registerTypes([TestComment::class])
+            ->withGraphiQL()
+            ->build();
+
+        $html = (string) $server->handle(
+            new \Nyholm\Psr7\ServerRequest('GET', '/graphql?explorer=altair', ['Accept' => 'text/html'])
+        )->getBody();
+        $this->assertStringContainsString('altair', strtolower($html));
+        $this->assertStringNotContainsString('graphiql.min.js', $html);
+
+        $html = (string) $server->handle(
+            new \Nyholm\Psr7\ServerRequest('GET', '/graphql', ['Accept' => 'text/html'])
+        )->getBody();
+        $this->assertStringContainsString('graphiql.min.js', $html);
     }
 
     public function test_typic_builder_with_subscriptions(): void

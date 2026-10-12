@@ -8,6 +8,7 @@ use GraphQL\Error\DebugFlag;
 use GraphQL\Error\FormattedError;
 use GraphQL\GraphQL;
 use GraphQL\Type\Schema;
+use LogicException;
 use Nyholm\Psr7\Response;
 use Psr\Container\ContainerInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -17,6 +18,7 @@ use Throwable;
 use Typic\Context;
 use Typic\Explorer\ApolloSandboxRenderer;
 use Typic\Explorer\ExplorerInterface;
+use Typic\Explorer\ExplorerType;
 use Typic\Subscription\PubSub\PubSubInterface;
 use Typic\Subscription\SubscriptionServer;
 
@@ -82,6 +84,18 @@ class TypicServer implements RequestHandlerInterface
     }
 
     /**
+     * Serve HTTP and WebSocket traffic from the subscription driver's event loop. Blocks until stopped.
+     */
+    public function serve(): void
+    {
+        if ($this->subscriptionServer === null) {
+            throw new LogicException('TypicServer::serve() requires subscriptions: call withSubscriptions() on the builder.');
+        }
+
+        $this->subscriptionServer->start();
+    }
+
+    /**
      * PSR-15 RequestHandlerInterface implementation.
      */
     public function handle(ServerRequestInterface $request): ResponseInterface
@@ -101,7 +115,11 @@ class TypicServer implements RequestHandlerInterface
             if ($this->sandboxEnabled && !isset($queryParams['query']) && (str_contains($accept, 'text/html') || $accept === '*/*' || $accept === '')) {
                 /** @var array<string, mixed> $sandboxOpts */
                 $sandboxOpts = $this->options['sandbox'] ?? $this->options;
-                $html = $this->explorer->render($this->sandboxEndpoint, $sandboxOpts);
+                // ?explorer=graphiql|altair|apollo switches the explorer for this request
+                $requested = $queryParams['explorer'] ?? null;
+                $type = is_string($requested) ? ExplorerType::tryFrom(strtolower($requested)) : null;
+                $explorer = $type?->createRenderer() ?? $this->explorer;
+                $html = $explorer->render($this->sandboxEndpoint, $sandboxOpts);
                 return $this->attachCorsHeaders(
                     new Response(200, ['Content-Type' => 'text/html; charset=UTF-8'], $html),
                     $request

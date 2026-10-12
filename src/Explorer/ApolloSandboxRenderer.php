@@ -105,6 +105,10 @@ class ApolloSandboxRenderer implements ExplorerInterface
 
             var subEndpoint = {$subEndpoint};
             if (subEndpoint) {
+                if (subEndpoint.startsWith('/')) {
+                    var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    subEndpoint = wsProto + '//' + window.location.host + subEndpoint;
+                }
                 config.initialSubscriptionEndpoint = subEndpoint;
             }
 

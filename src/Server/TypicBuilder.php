@@ -5,13 +5,11 @@ declare(strict_types=1);
 namespace Typic\Server;
 
 use Psr\Container\ContainerInterface;
-use Typic\Explorer\AltairRenderer;
-use Typic\Explorer\ApolloSandboxRenderer;
 use Typic\Explorer\ExplorerInterface;
 use Typic\Explorer\ExplorerType;
-use Typic\Explorer\GraphiQLRenderer;
 use Typic\Scanner\DirectoryScanner;
 use Typic\Schema\SchemaCompiler;
+use Typic\Subscription\Driver\HttpServerInterface;
 use Typic\Subscription\Driver\WebSocketServerInterface;
 use Typic\Subscription\PubSub\PubSubInterface;
 use Typic\Subscription\SubscriptionRegistry;
@@ -146,18 +144,13 @@ class TypicBuilder
         if ($explorer instanceof ExplorerInterface) {
             $this->explorer = $explorer;
         } elseif ($explorer instanceof ExplorerType) {
-            $this->explorer = match ($explorer) {
-                ExplorerType::GraphiQL => new GraphiQLRenderer(),
-                ExplorerType::Altair => new AltairRenderer(),
-                ExplorerType::Apollo, ExplorerType::Sandbox => new ApolloSandboxRenderer(),
-            };
+            $this->explorer = $explorer->createRenderer();
         } else {
-            $this->explorer = match (strtolower($explorer)) {
-                'graphiql' => new GraphiQLRenderer(),
-                'altair' => new AltairRenderer(),
-                'apollo', 'sandbox' => new ApolloSandboxRenderer(),
-                default => throw new \InvalidArgumentException("Unknown explorer type '{$explorer}'. Available: graphiql, altair, apollo, sandbox."),
-            };
+            try {
+                $this->explorer = ExplorerType::from(strtolower($explorer))->createRenderer();
+            } catch (\ValueError) {
+                throw new \InvalidArgumentException("Unknown explorer type '{$explorer}'. Available: graphiql, altair, apollo, sandbox.");
+            }
         }
 
         return $this;
@@ -235,9 +228,15 @@ class TypicBuilder
     /**
      * Enable GraphQL real-time subscriptions with a pluggable WebSocket driver and Pub/Sub backplane.
      *
+     * When the driver implements HttpServerInterface (WorkermanDriver does), it also serves the
+     * HTTP endpoint, so queries, mutations and subscriptions share one event loop and one Pub/Sub.
+     * Start it with TypicServer::serve().
+     *
      * @param WebSocketServerInterface|null $driver Defaults to WorkermanDriver(port: 8080)
-     * @param PubSubInterface|null $pubSub Defaults to InMemoryPubSub
-     * @param string|null $endpoint WebSocket endpoint URL (e.g. 'ws://localhost:8080')
+     * @param PubSubInterface|null $pubSub Defaults to RedisPubSub using REDIS_URL, or redis://127.0.0.1:6379.
+     *                                     Pass InMemoryPubSub to run a single process without Redis.
+     * @param string|null $endpoint WebSocket endpoint URL (e.g. 'ws://localhost:8080'). Defaults to the
+     *                              explorer's HTTP endpoint path when the driver also serves HTTP.
      * @return $this
      */
     public function withSubscriptions(
@@ -298,8 +297,11 @@ class TypicBuilder
                 container: $this->container,
             );
 
+            $driver = $subscriptionServer->getDriver();
             $subEndpoint = $this->subscriptionEndpoint
-                ?? ('ws://localhost:' . $subscriptionServer->getDriver()->getPort());
+                ?? ($driver instanceof HttpServerInterface
+                    ? $this->sandboxEndpoint
+                    : 'ws://localhost:' . $driver->getPort());
             $options['subscriptionEndpoint'] ??= $subEndpoint;
             $options['sandbox'] ??= [];
             if (is_array($options['sandbox'])) {
@@ -307,7 +309,7 @@ class TypicBuilder
             }
         }
 
-        return new TypicServer(
+        $server = new TypicServer(
             schema: $schema,
             container: $this->container,
             sandboxEnabled: $this->sandboxEnabled,
@@ -320,5 +322,12 @@ class TypicBuilder
             pubSub: $this->pubSub,
             explorer: $this->explorer,
         );
+
+        $driver = $subscriptionServer?->getDriver();
+        if ($driver instanceof HttpServerInterface) {
+            $driver->onRequest($server->handle(...));
+        }
+
+        return $server;
     }
 }
