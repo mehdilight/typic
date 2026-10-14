@@ -57,7 +57,11 @@ final class Validator
         foreach ($plan as $field) {
             $value = $data[$field->name] ?? null;
             $path = $prefix . $field->name;
-            $this->applyAll($field->rules, $field->bail, $value, $data, $path, $errors);
+            // Filled only applies to fields that were sent
+            $rules = array_key_exists($field->name, $data)
+                ? $field->rules
+                : array_values(array_filter($field->rules, static fn (Rule|DependentRule $rule): bool => !$rule instanceof Filled));
+            $this->applyAll($rules, $field->bail, $value, $data, $path, $errors);
             if (!is_array($value)) {
                 continue;
             }

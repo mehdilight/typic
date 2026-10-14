@@ -552,7 +552,7 @@ How a field's rules run, following Laravel's validator:
 - `#[Bail]` stops a field (or each `#[Each]` item) at its first problem, so clients get at most one message per field.
 - A rule's `message:` argument replaces the text but keeps the code.
 
-Codes: `BLANK`, `REQUIRED`, `TOO_SHORT`/`TOO_LONG` (`Length`), `TOO_SMALL`/`TOO_LARGE` (`Range`), `INVALID_FORMAT` (`Pattern`), `INVALID_EMAIL`, `INVALID_URL`, `INVALID_UUID`, `INVALID_IP`, `INVALID_JSON`, `INVALID_TIMEZONE`, `INVALID_HEX_COLOR`, `INVALID_CHOICE` (`OneOf`), `EXCLUDED_VALUE` (`NotOneOf`), `DUPLICATE` (`Distinct`), `ALPHA`, `ALPHA_NUM`, `ALPHA_DASH`, `STARTS_WITH`, `ENDS_WITH`, `NOT_MULTIPLE_OF`, `SAME`, `DIFFERENT`, `PROHIBITED`, `BEFORE`, `BEFORE_OR_EQUAL`, `AFTER`, `AFTER_OR_EQUAL`, `FILE_TOO_LARGE` and `INVALID_FILE_TYPE`.
+Codes: `BLANK` (`NotBlank`, `Filled`), `REQUIRED`, `TOO_SHORT`/`TOO_LONG` (`Length`), `TOO_SMALL`/`TOO_LARGE` (`Range`), `INVALID_FORMAT` (`Pattern`), `INVALID_EMAIL`, `INVALID_URL`, `INVALID_UUID`, `INVALID_IP`, `INVALID_JSON`, `INVALID_TIMEZONE`, `INVALID_HEX_COLOR`, `INVALID_CHOICE` (`OneOf`), `EXCLUDED_VALUE` (`NotOneOf`), `DUPLICATE` (`Distinct`), `ALPHA`, `ALPHA_NUM`, `ALPHA_DASH`, `STARTS_WITH`, `ENDS_WITH`, `NOT_MULTIPLE_OF`, `SAME`, `DIFFERENT`, `PROHIBITED`, `BEFORE`, `BEFORE_OR_EQUAL`, `AFTER`, `AFTER_OR_EQUAL`, `FILE_TOO_LARGE` and `INVALID_FILE_TYPE`.
 
 Custom rules are attribute classes implementing `Rule` (or `DependentRule` to read sibling fields) and returning a `Violation`; implement `ImplicitRule` too when missing values must be checked:
 
@@ -588,6 +588,8 @@ if ($input->has('bio')) {
     $profile->bio = $input->bio; // null clears it
 }
 ```
+
+Mark fields that may be left out but not cleared with `#[Assert\Filled]`: it only checks a field that was sent, and rejects `null`, blank strings and empty lists with `BLANK`.
 
 `has()` takes PHP property names, also for renamed fields, and `presentFields()` lists them; nested inputs track their own fields. A field with a default value always counts as present, and a PHP default such as `= null` becomes a GraphQL default, so leave tracked fields without one.
 
