@@ -17,7 +17,7 @@ final class EndsWith implements Rule
         $this->affixes = array_values($affixes);
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         foreach ($this->affixes as $affix) {
             if (is_string($value) && str_ends_with($value, $affix)) {
@@ -25,6 +25,6 @@ final class EndsWith implements Rule
             }
         }
 
-        return 'must end with one of: ' . Value::describeList($this->affixes);
+        return new Violation('ENDS_WITH', 'must end with one of: ' . Value::describeList($this->affixes), ['values' => $this->affixes]);
     }
 }

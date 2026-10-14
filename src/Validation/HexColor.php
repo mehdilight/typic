@@ -16,8 +16,8 @@ final class HexColor implements Rule
     {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
-        return is_string($value) && preg_match('/^#(?:(?:[0-9a-f]{3}){1,2}|(?:[0-9a-f]{4}){1,2})$/i', $value) === 1 ? null : ($this->message ?? 'must be a hex color');
+        return is_string($value) && preg_match('/^#(?:(?:[0-9a-f]{3}){1,2}|(?:[0-9a-f]{4}){1,2})$/i', $value) === 1 ? null : new Violation('INVALID_HEX_COLOR', $this->message ?? 'must be a hex color');
     }
 }

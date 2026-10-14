@@ -20,13 +20,13 @@ final class RequiredWithout implements DependentRule, ImplicitRule
         $this->fields = array_values($fields);
     }
 
-    public function check(mixed $value, array $input): ?string
+    public function check(mixed $value, array $input): ?Violation
     {
         $present = array_filter($this->fields, static fn (string $field): bool => !Value::isEmpty($input[$field] ?? null));
         if (count($present) === count($this->fields) || !Value::isEmpty($value)) {
             return null;
         }
 
-        return sprintf('is required when %s is missing', implode(' or ', $this->fields));
+        return new Violation('REQUIRED', sprintf('is required when %s is missing', implode(' or ', $this->fields)), ['fields' => $this->fields]);
     }
 }

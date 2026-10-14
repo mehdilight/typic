@@ -24,7 +24,7 @@ final class MimeType implements Rule
         $this->types = array_values($types);
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         if (!$value instanceof UploadedFileInterface) {
             return null;
@@ -40,7 +40,7 @@ final class MimeType implements Rule
             }
         }
 
-        return 'must be a file of type ' . implode(', ', $this->types);
+        return new Violation('INVALID_FILE_TYPE', 'must be a file of type ' . implode(', ', $this->types), ['types' => $this->types]);
     }
 
     private static function detect(UploadedFileInterface $file): ?string

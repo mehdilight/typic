@@ -12,6 +12,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Typic\Server\TypicServer;
 use Typic\Subscription\Driver\Workerman\WorkermanDriver;
+use Typic\Tests\Support\Violations;
 use Typic\Tests\UploadFixtures\UploadResolver;
 use Typic\Typic;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -70,10 +71,10 @@ class UploadTest extends TestCase
 
         // Claims to be a PNG, but the content says otherwise
         $fake = $this->json($this->send($query, $map, ['0' => $this->file('fake.png', '<?php echo 1;', 'image/png')]));
-        $this->assertSame(['image' => ['must be a file of type image/*']], $fake['errors'][0]['extensions']['validation']);
+        $this->assertSame(['image' => ['must be a file of type image/*']], Violations::messages($fake['errors'][0]));
 
         $big = $this->json($this->send($query, $map, ['0' => $this->file('big.png', self::PNG . str_repeat("\0", 2000), 'image/png')]));
-        $this->assertSame(['image' => ['must be at most 1 KB']], $big['errors'][0]['extensions']['validation']);
+        $this->assertSame(['image' => ['must be at most 1 KB']], Violations::messages($big['errors'][0]));
     }
 
     public function test_multipart_requests_need_a_preflight_header(): void

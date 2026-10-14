@@ -22,12 +22,12 @@ final class OneOf implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         $items = is_array($value) ? $value : [$value];
         foreach ($items as $item) {
             if (!is_scalar($item) || !in_array($item, $this->values, true)) {
-                return $this->message ?? 'must be one of: ' . Value::describeList($this->values);
+                return new Violation('INVALID_CHOICE', $this->message ?? 'must be one of: ' . Value::describeList($this->values), ['values' => $this->values]);
             }
         }
 

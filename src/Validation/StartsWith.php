@@ -17,7 +17,7 @@ final class StartsWith implements Rule
         $this->affixes = array_values($affixes);
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         foreach ($this->affixes as $affix) {
             if (is_string($value) && str_starts_with($value, $affix)) {
@@ -25,6 +25,6 @@ final class StartsWith implements Rule
             }
         }
 
-        return 'must start with one of: ' . Value::describeList($this->affixes);
+        return new Violation('STARTS_WITH', 'must start with one of: ' . Value::describeList($this->affixes), ['values' => $this->affixes]);
     }
 }

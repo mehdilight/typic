@@ -18,7 +18,7 @@ final class Ip implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         $flags = match ($this->version) {
             4 => FILTER_FLAG_IPV4,
@@ -27,6 +27,6 @@ final class Ip implements Rule
         };
         $label = $this->version !== null ? "IPv{$this->version} address" : 'IP address';
 
-        return is_string($value) && filter_var($value, FILTER_VALIDATE_IP, $flags) !== false ? null : ($this->message ?? "must be a valid {$label}");
+        return is_string($value) && filter_var($value, FILTER_VALIDATE_IP, $flags) !== false ? null : new Violation('INVALID_IP', $this->message ?? "must be a valid {$label}", ['version' => $this->version]);
     }
 }

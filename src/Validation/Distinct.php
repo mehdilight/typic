@@ -18,7 +18,7 @@ final class Distinct implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         if (!is_array($value)) {
             return null;
@@ -28,7 +28,7 @@ final class Distinct implements Rule
         foreach ($value as $item) {
             $key = is_string($item) && $this->ignoreCase ? mb_strtolower($item) : serialize($item);
             if (isset($seen[$key])) {
-                return $this->message ?? 'must not contain duplicates';
+                return new Violation('DUPLICATE', $this->message ?? 'must not contain duplicates');
             }
             $seen[$key] = true;
         }

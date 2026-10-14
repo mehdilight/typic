@@ -26,13 +26,13 @@ final class RequiredIf implements DependentRule, ImplicitRule
         $this->values = is_array($values) ? array_values($values) : [$values];
     }
 
-    public function check(mixed $value, array $input): ?string
+    public function check(mixed $value, array $input): ?Violation
     {
         $matches = in_array($input[$this->field] ?? null, $this->values, true);
         if (!$matches || !Value::isEmpty($value)) {
             return null;
         }
 
-        return $this->message ?? sprintf('is required when %s is %s', $this->field, Value::describeList($this->values));
+        return new Violation('REQUIRED', $this->message ?? sprintf('is required when %s is %s', $this->field, Value::describeList($this->values)), ['field' => $this->field, 'values' => $this->values]);
     }
 }

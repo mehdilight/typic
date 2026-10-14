@@ -18,10 +18,10 @@ final class Alpha implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         $pattern = $this->ascii ? '/\\A[a-zA-Z]+\\z/u' : '/\\A[\\pL\\pM]+\\z/u';
 
-        return is_string($value) && preg_match($pattern, $value) === 1 ? null : ($this->message ?? 'must contain only letters');
+        return is_string($value) && preg_match($pattern, $value) === 1 ? null : new Violation('ALPHA', $this->message ?? 'must contain only letters');
     }
 }

@@ -12,7 +12,7 @@ interface DependentRule
 {
     /**
      * @param array<string, mixed> $input The sibling fields, by GraphQL name
-     * @return string|null What is wrong, or null when valid
+     * @return Violation|null What is wrong, or null when valid
      */
-    public function check(mixed $value, array $input): ?string;
+    public function check(mixed $value, array $input): ?Violation;
 }

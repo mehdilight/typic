@@ -18,12 +18,12 @@ final class NotOneOf implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         $items = is_array($value) ? $value : [$value];
         foreach ($items as $item) {
             if (in_array($item, $this->values, true)) {
-                return $this->message ?? 'must not be one of: ' . Value::describeList($this->values);
+                return new Violation('EXCLUDED_VALUE', $this->message ?? 'must not be one of: ' . Value::describeList($this->values), ['values' => $this->values]);
             }
         }
 

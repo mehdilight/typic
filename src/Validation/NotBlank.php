@@ -17,8 +17,8 @@ final class NotBlank implements Rule, ImplicitRule
     {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
-        return Value::isEmpty($value) ? ($this->message ?? 'must not be blank') : null;
+        return Value::isEmpty($value) ? new Violation('BLANK', $this->message ?? 'must not be blank') : null;
     }
 }

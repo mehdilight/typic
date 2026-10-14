@@ -520,7 +520,11 @@ Use `Email` as a resolver argument, input property or return type. For classes f
 
 ### 11. Input Validation and Uploads
 
-Rules are PHP attributes on resolver parameters or input properties. Typic checks arguments after resolver middleware changes them and before hydration or resolver execution. All violations appear under `errors[].extensions.validation`, keyed by paths such as `input.address.city` or `input.tags.2`.
+Rules are PHP attributes on resolver parameters or input properties. Typic checks arguments after resolver middleware changes them and before hydration or resolver execution. Every problem appears in `errors[].extensions.violations`, in the order found, with a field path such as `input.address.city` or `input.tags.2`, a stable `code` for clients to translate, an English `message`, and the `params` the message mentions:
+
+```json
+{"path": "input.name", "code": "TOO_LONG", "message": "must be at most 32 characters", "params": {"min": null, "max": 32, "unit": "characters"}}
+```
 
 ```php
 use Typic\Validation as Assert;
@@ -539,7 +543,29 @@ final readonly class SignupInput
 }
 ```
 
-Other rules include `Url`, `Pattern`, `OneOf`, `NotOneOf`, `Alpha`, `AlphaNum`, `AlphaDash`, `Uuid`, `Ip`, `Json`, `Timezone`, `HexColor`, `MultipleOf`, `Same`, `Different`, `RequiredIf`, `RequiredUnless`, `RequiredWith`, `RequiredWithout`, `Before` and `After`. Ordinary rules skip null; implicit rules such as `NotBlank` and conditional required rules check it. Dependent rules refer to sibling GraphQL field names, including renamed fields. Nested inputs and lists are validated recursively. Custom attribute classes can implement `Rule` or `DependentRule`; implement `ImplicitRule` too when missing values must be checked.
+Other rules include `Url`, `Pattern`, `OneOf`, `NotOneOf`, `Alpha`, `AlphaNum`, `AlphaDash`, `Uuid`, `Ip`, `Json`, `Timezone`, `HexColor`, `MultipleOf`, `Same`, `Different`, `RequiredIf`, `RequiredUnless`, `RequiredWith`, `RequiredWithout`, `Before` and `After`. Dependent rules refer to sibling GraphQL field names, including renamed fields. Nested inputs and lists are validated recursively.
+
+How a field's rules run, following Laravel's validator:
+
+- Ordinary rules skip a missing value, `null` or a blank string. Implicit rules (`NotBlank` and the `Required*` rules) check them, so pair a format rule with `NotBlank` when the value must be filled in.
+- When an implicit rule fails, the field's remaining rules are skipped: an empty email reports `BLANK`, not also `INVALID_EMAIL`.
+- `#[Bail]` stops a field (or each `#[Each]` item) at its first problem, so clients get at most one message per field.
+- A rule's `message:` argument replaces the text but keeps the code.
+
+Codes: `BLANK`, `REQUIRED`, `TOO_SHORT`/`TOO_LONG` (`Length`), `TOO_SMALL`/`TOO_LARGE` (`Range`), `INVALID_FORMAT` (`Pattern`), `INVALID_EMAIL`, `INVALID_URL`, `INVALID_UUID`, `INVALID_IP`, `INVALID_JSON`, `INVALID_TIMEZONE`, `INVALID_HEX_COLOR`, `INVALID_CHOICE` (`OneOf`), `EXCLUDED_VALUE` (`NotOneOf`), `DUPLICATE` (`Distinct`), `ALPHA`, `ALPHA_NUM`, `ALPHA_DASH`, `STARTS_WITH`, `ENDS_WITH`, `NOT_MULTIPLE_OF`, `SAME`, `DIFFERENT`, `PROHIBITED`, `BEFORE`, `BEFORE_OR_EQUAL`, `AFTER`, `AFTER_OR_EQUAL`, `FILE_TOO_LARGE` and `INVALID_FILE_TYPE`.
+
+Custom rules are attribute classes implementing `Rule` (or `DependentRule` to read sibling fields) and returning a `Violation`; implement `ImplicitRule` too when missing values must be checked:
+
+```php
+#[Attribute(Attribute::TARGET_PROPERTY | Attribute::TARGET_PARAMETER)]
+final class NotReserved implements Rule
+{
+    public function check(mixed $value): ?Violation
+    {
+        return in_array($value, ['admin', 'root'], true) ? new Violation('RESERVED', 'is reserved') : null;
+    }
+}
+```
 
 For files, type arguments or input properties as `Psr\Http\Message\UploadedFileInterface`. Clients send the [GraphQL multipart request format](https://github.com/jaydenseric/graphql-multipart-request-spec), with `operations`, `map`, and file parts, plus the preflight header above. File lists use `#[Arg(arrayOf: UploadedFileInterface::class)]`. One file can map to several null placeholders; batched operations are currently unsupported.
 

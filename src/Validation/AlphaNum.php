@@ -18,10 +18,10 @@ final class AlphaNum implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         $pattern = $this->ascii ? '/\\A[a-zA-Z0-9]+\\z/u' : '/\\A[\\pL\\pM\\pN]+\\z/u';
 
-        return is_string($value) && preg_match($pattern, $value) === 1 ? null : ($this->message ?? 'must contain only letters and numbers');
+        return is_string($value) && preg_match($pattern, $value) === 1 ? null : new Violation('ALPHA_NUM', $this->message ?? 'must contain only letters and numbers');
     }
 }

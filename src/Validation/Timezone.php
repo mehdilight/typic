@@ -16,8 +16,8 @@ final class Timezone implements Rule
     {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
-        return is_string($value) && in_array($value, \DateTimeZone::listIdentifiers(), true) ? null : ($this->message ?? 'must be a valid time zone');
+        return is_string($value) && in_array($value, \DateTimeZone::listIdentifiers(), true) ? null : new Violation('INVALID_TIMEZONE', $this->message ?? 'must be a valid time zone');
     }
 }

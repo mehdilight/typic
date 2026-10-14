@@ -9,34 +9,28 @@ use GraphQL\Error\ProvidesExtensions;
 use RuntimeException;
 
 /**
- * Input broke one or more rules. Clients get every problem in extensions.validation,
- * keyed by the path of the field, e.g. {"input.email": ["must be a valid email address"]}.
+ * Input broke one or more rules. Clients get every problem in extensions.violations, in the order found:
+ * [{"path": "input.email", "code": "INVALID_EMAIL", "message": "must be a valid email address", "params": {}}].
  */
 final class ValidationError extends RuntimeException implements ClientAware, ProvidesExtensions
 {
     /**
-     * @param array<string, list<string>> $errors Path => problems
+     * @param list<array{path: string, violation: Violation}> $violations
      */
-    public function __construct(private array $errors)
+    public function __construct(private array $violations)
     {
-        $problems = [];
-        foreach ($errors as $path => $messages) {
-            foreach ($messages as $message) {
-                $problems[] = "{$path} {$message}";
-            }
-        }
-
+        $problems = array_map(static fn (array $item): string => "{$item['path']} {$item['violation']->message}", $violations);
         $shown = array_slice($problems, 0, 2);
         $more = count($problems) - count($shown);
         parent::__construct('Invalid input: ' . implode('; ', $shown) . ($more > 0 ? "; and {$more} more." : '.'));
     }
 
     /**
-     * @return array<string, list<string>>
+     * @return list<array{path: string, violation: Violation}>
      */
-    public function errors(): array
+    public function violations(): array
     {
-        return $this->errors;
+        return $this->violations;
     }
 
     public function isClientSafe(): bool
@@ -46,6 +40,11 @@ final class ValidationError extends RuntimeException implements ClientAware, Pro
 
     public function getExtensions(): array
     {
-        return ['validation' => $this->errors];
+        return ['violations' => array_map(static fn (array $item): array => [
+            'path' => $item['path'],
+            'code' => $item['violation']->code,
+            'message' => $item['violation']->message,
+            'params' => (object) $item['violation']->params,
+        ], $this->violations)];
     }
 }

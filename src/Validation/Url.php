@@ -45,9 +45,9 @@ final class Url implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
-        return is_string($value) && $this->isUrl($value) ? null : ($this->message ?? 'must be a valid URL');
+        return is_string($value) && $this->isUrl($value) ? null : new Violation('INVALID_URL', $this->message ?? 'must be a valid URL');
     }
 
     private function isUrl(string $value): bool

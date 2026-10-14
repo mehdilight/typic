@@ -50,32 +50,25 @@ final class Validator
     /**
      * @param list<FieldPlan> $plan
      * @param array<array-key, mixed> $data
-     * @param array<string, list<string>> $errors
+     * @param list<array{path: string, violation: Violation}> $errors
      */
     private function check(array $plan, array $data, string $prefix, array &$errors): void
     {
         foreach ($plan as $field) {
             $value = $data[$field->name] ?? null;
             $path = $prefix . $field->name;
-
-            foreach ($field->rules as $rule) {
-                $this->apply($rule, $value, $data, $path, $errors);
-            }
-
+            $this->applyAll($field->rules, $field->bail, $value, $data, $path, $errors);
             if (!is_array($value)) {
                 continue;
             }
-
-            foreach ($field->each as $rule) {
+            if ($field->each !== []) {
                 foreach ($value as $index => $item) {
-                    $this->apply($rule, $item, $data, "{$path}.{$index}", $errors);
+                    $this->applyAll($field->each, $field->bail, $item, $data, "{$path}.{$index}", $errors);
                 }
             }
-
             if ($field->input === null) {
                 continue;
             }
-
             $inputPlan = $this->inputPlan($field->input);
             if ($field->list) {
                 foreach ($value as $index => $item) {
@@ -90,20 +83,29 @@ final class Validator
     }
 
     /**
+     * Runs one value's rules in order. As in Laravel, a failed implicit rule (NotBlank, Required*) ends
+     * the checks, since the value is missing; with #[Bail] any failure does.
+     *
+     * @param list<Rule|DependentRule> $rules
      * @param array<array-key, mixed> $data
-     * @param array<string, list<string>> $errors
+     * @param list<array{path: string, violation: Violation}> $errors
      */
-    private function apply(Rule|DependentRule $rule, mixed $value, array $data, string $path, array &$errors): void
+    private function applyAll(array $rules, bool $bail, mixed $value, array $data, string $path, array &$errors): void
     {
-        // Only implicit rules (NotBlank, RequiredIf...) look at missing values
-        if ($value === null && !$rule instanceof ImplicitRule) {
-            return;
-        }
-
-        /** @var array<string, mixed> $data */
-        $problem = $rule instanceof DependentRule ? $rule->check($value, $data) : $rule->check($value);
-        if ($problem !== null) {
-            $errors[$path][] = $problem;
+        foreach ($rules as $rule) {
+            // Only implicit rules look at missing values; others skip null and blank strings
+            if (!$rule instanceof ImplicitRule && ($value === null || (is_string($value) && trim($value) === ''))) {
+                continue;
+            }
+            /** @var array<string, mixed> $data */
+            $violation = $rule instanceof DependentRule ? $rule->check($value, $data) : $rule->check($value);
+            if ($violation === null) {
+                continue;
+            }
+            $errors[] = ['path' => $path, 'violation' => $violation];
+            if ($bail || $rule instanceof ImplicitRule) {
+                return;
+            }
         }
     }
 
@@ -159,7 +161,7 @@ final class Validator
                 continue;
             }
 
-            $plan[] = new FieldPlan($nameOf($member), $rules, $each, $input, $listOf !== null);
+            $plan[] = new FieldPlan($nameOf($member), $rules, $each, $input, $listOf !== null, self::attribute($member, Bail::class) !== null);
         }
 
         return $plan;

@@ -16,9 +16,9 @@ final class Json implements Rule
     {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
-        return is_string($value) && self::isJson($value) ? null : ($this->message ?? 'must be valid JSON');
+        return is_string($value) && self::isJson($value) ? null : new Violation('INVALID_JSON', $this->message ?? 'must be valid JSON');
     }
 
     private static function isJson(string $value): bool

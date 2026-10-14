@@ -19,13 +19,13 @@ final class MaxFileSize implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         if (!$value instanceof UploadedFileInterface) {
             return null;
         }
 
-        return ($value->getSize() ?? 0) <= $this->bytes ? null : ($this->message ?? 'must be at most ' . self::describe($this->bytes));
+        return ($value->getSize() ?? 0) <= $this->bytes ? null : new Violation('FILE_TOO_LARGE', $this->message ?? 'must be at most ' . self::describe($this->bytes), ['max' => $this->bytes]);
     }
 
     private static function describe(int $bytes): string

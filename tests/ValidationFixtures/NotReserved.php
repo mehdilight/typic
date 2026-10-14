@@ -6,6 +6,7 @@ namespace Typic\Tests\ValidationFixtures;
 
 use Attribute;
 use Typic\Validation\Rule;
+use Typic\Validation\Violation;
 
 /**
  * A custom rule: any attribute implementing Rule works.
@@ -13,8 +14,8 @@ use Typic\Validation\Rule;
 #[Attribute(Attribute::TARGET_PROPERTY | Attribute::TARGET_PARAMETER)]
 final class NotReserved implements Rule
 {
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
-        return in_array(strtolower((string) $value), ['admin', 'root'], true) ? 'is reserved' : null;
+        return in_array(strtolower((string) $value), ['admin', 'root'], true) ? new Violation('RESERVED', 'is reserved') : null;
     }
 }

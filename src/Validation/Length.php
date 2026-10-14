@@ -19,7 +19,7 @@ final class Length implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         if (is_array($value)) {
             [$length, $unit] = [count($value), 'items'];
@@ -35,10 +35,13 @@ final class Length implements Rule
 
         $verb = $unit === 'items' ? 'have' : 'be';
 
-        return $this->message ?? match (true) {
+        $message = $this->message ?? match (true) {
             $this->min !== null && $this->max !== null => "must {$verb} between {$this->min} and {$this->max} {$unit}",
             $this->min !== null => "must {$verb} at least {$this->min} {$unit}",
             default => "must {$verb} at most {$this->max} {$unit}",
         };
+        $code = $this->min !== null && $length < $this->min ? 'TOO_SHORT' : 'TOO_LONG';
+
+        return new Violation($code, $message, ['min' => $this->min, 'max' => $this->max, 'unit' => $unit]);
     }
 }

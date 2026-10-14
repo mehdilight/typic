@@ -11,6 +11,7 @@ use PHPUnit\Framework\TestCase;
 use Typic\Validation as Assert;
 use Typic\Validation\DependentRule;
 use Typic\Validation\Rule;
+use Typic\Validation\Violation;
 
 class ValidationRulesTest extends TestCase
 {
@@ -113,7 +114,9 @@ class ValidationRulesTest extends TestCase
     #[DataProvider('invalidValues')]
     public function test_invalid_values_explain_what_is_wrong(Rule $rule, mixed $value, string $message): void
     {
-        $this->assertSame($message, $rule->check($value));
+        $violation = $rule->check($value);
+        $this->assertInstanceOf(Violation::class, $violation);
+        $this->assertSame($message, $violation->message);
     }
 
     /**
@@ -150,7 +153,7 @@ class ValidationRulesTest extends TestCase
     #[DataProvider('dependentRules')]
     public function test_dependent_rules(DependentRule $rule, mixed $value, array $input, ?string $message): void
     {
-        $this->assertSame($message, $rule->check($value, $input));
+        $this->assertSame($message, $rule->check($value, $input)?->message);
     }
 
     public function test_a_broken_pattern_fails_immediately(): void
@@ -159,5 +162,31 @@ class ValidationRulesTest extends TestCase
         $this->expectExceptionMessage('Invalid regular expression /(unclosed/');
 
         new Assert\Pattern('/(unclosed/');
+    }
+
+    /**
+     * @return iterable<string, array{Rule, mixed, string, array<string, mixed>}>
+     */
+    public static function codedViolations(): iterable
+    {
+        yield 'too short' => [new Assert\Length(min: 3, max: 10), 'ab', 'TOO_SHORT', ['min' => 3, 'max' => 10, 'unit' => 'characters']];
+        yield 'too long' => [new Assert\Length(min: 3, max: 10), str_repeat('a', 11), 'TOO_LONG', ['min' => 3, 'max' => 10, 'unit' => 'characters']];
+        yield 'too small' => [new Assert\Range(min: 1), 0, 'TOO_SMALL', ['min' => 1, 'max' => null]];
+        yield 'too large' => [new Assert\Range(max: 5), 6, 'TOO_LARGE', ['min' => null, 'max' => 5]];
+        yield 'email' => [new Assert\Email(), 'nope', 'INVALID_EMAIL', []];
+        yield 'pattern' => [new Assert\Pattern('/^a$/'), 'b', 'INVALID_FORMAT', []];
+        yield 'blank' => [new Assert\NotBlank(), ' ', 'BLANK', []];
+        yield 'choice' => [new Assert\OneOf(['a', 'b']), 'c', 'INVALID_CHOICE', ['values' => ['a', 'b']]];
+        yield 'custom message keeps the code' => [new Assert\Length(max: 1, message: 'too long!'), 'ab', 'TOO_LONG', ['min' => null, 'max' => 1, 'unit' => 'characters']];
+    }
+
+    /** @param array<string, mixed> $params */
+    #[DataProvider('codedViolations')]
+    public function test_violations_carry_a_stable_code_and_params(Rule $rule, mixed $value, string $code, array $params): void
+    {
+        $violation = $rule->check($value);
+
+        $this->assertInstanceOf(Violation::class, $violation);
+        $this->assertSame([$code, $params], [$violation->code, $violation->params]);
     }
 }

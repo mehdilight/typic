@@ -18,7 +18,7 @@ final class Email implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         $flags = $this->unicode ? FILTER_FLAG_EMAIL_UNICODE : 0;
         // Line breaks would let a value inject extra headers into an email
@@ -26,6 +26,6 @@ final class Email implements Rule
             && preg_match('/[\r\n]/', $value) !== 1
             && filter_var($value, FILTER_VALIDATE_EMAIL, $flags) !== false;
 
-        return $valid ? null : ($this->message ?? 'must be a valid email address');
+        return $valid ? null : new Violation('INVALID_EMAIL', $this->message ?? 'must be a valid email address');
     }
 }

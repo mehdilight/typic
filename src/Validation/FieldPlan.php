@@ -22,6 +22,7 @@ final class FieldPlan
         public readonly array $each,
         public readonly ?string $input,
         public readonly bool $list,
+        public readonly bool $bail = false,
     ) {
     }
 }

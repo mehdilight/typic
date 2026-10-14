@@ -16,8 +16,8 @@ final class Uuid implements Rule
     {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
-        return is_string($value) && preg_match('/^[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12}$/iD', $value) === 1 ? null : ($this->message ?? 'must be a valid UUID');
+        return is_string($value) && preg_match('/^[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12}$/iD', $value) === 1 ? null : new Violation('INVALID_UUID', $this->message ?? 'must be a valid UUID');
     }
 }

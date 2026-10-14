@@ -23,12 +23,12 @@ final class Pattern implements Rule
         }
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         if (is_string($value) && preg_match($this->regex, $value) === 1) {
             return null;
         }
 
-        return $this->message ?? 'has an invalid format';
+        return new Violation('INVALID_FORMAT', $this->message ?? 'has an invalid format');
     }
 }

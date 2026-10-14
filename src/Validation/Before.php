@@ -21,7 +21,7 @@ final class Before implements DependentRule
     ) {
     }
 
-    public function check(mixed $value, array $input): ?string
+    public function check(mixed $value, array $input): ?Violation
     {
         if (!$value instanceof DateTimeInterface) {
             return null;
@@ -39,6 +39,6 @@ final class Before implements DependentRule
             return null;
         }
 
-        return $this->message ?? "must be before {$this->than}";
+        return new Violation('BEFORE', $this->message ?? "must be before {$this->than}", ['than' => $this->than]);
     }
 }

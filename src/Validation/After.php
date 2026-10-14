@@ -21,7 +21,7 @@ final class After implements DependentRule
     ) {
     }
 
-    public function check(mixed $value, array $input): ?string
+    public function check(mixed $value, array $input): ?Violation
     {
         if (!$value instanceof DateTimeInterface) {
             return null;
@@ -39,6 +39,6 @@ final class After implements DependentRule
             return null;
         }
 
-        return $this->message ?? "must be after {$this->than}";
+        return new Violation('AFTER', $this->message ?? "must be after {$this->than}", ['than' => $this->than]);
     }
 }

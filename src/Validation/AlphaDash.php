@@ -18,10 +18,10 @@ final class AlphaDash implements Rule
     ) {
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         $pattern = $this->ascii ? '/\\A[a-zA-Z0-9_-]+\\z/u' : '/\\A[\\pL\\pM\\pN_-]+\\z/u';
 
-        return is_string($value) && preg_match($pattern, $value) === 1 ? null : ($this->message ?? 'must contain only letters, numbers, dashes and underscores');
+        return is_string($value) && preg_match($pattern, $value) === 1 ? null : new Violation('ALPHA_DASH', $this->message ?? 'must contain only letters, numbers, dashes and underscores');
     }
 }

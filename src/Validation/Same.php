@@ -18,8 +18,8 @@ final class Same implements DependentRule
     ) {
     }
 
-    public function check(mixed $value, array $input): ?string
+    public function check(mixed $value, array $input): ?Violation
     {
-        return $value === ($input[$this->field] ?? null) ? null : ($this->message ?? "must match {$this->field}");
+        return $value === ($input[$this->field] ?? null) ? null : new Violation('SAME', $this->message ?? "must match {$this->field}", ['field' => $this->field]);
     }
 }

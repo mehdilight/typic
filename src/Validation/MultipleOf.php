@@ -22,10 +22,10 @@ final class MultipleOf implements Rule
         }
     }
 
-    public function check(mixed $value): ?string
+    public function check(mixed $value): ?Violation
     {
         if (!is_int($value) && !is_float($value)) {
-            return $this->message ?? "must be a multiple of {$this->step}";
+            return $this->violation();
         }
 
         if (is_int($value) && is_int($this->step)) {
@@ -36,6 +36,11 @@ final class MultipleOf implements Rule
             $valid = abs($ratio - round($ratio)) < 1e-9;
         }
 
-        return $valid ? null : ($this->message ?? "must be a multiple of {$this->step}");
+        return $valid ? null : $this->violation();
+    }
+
+    private function violation(): Violation
+    {
+        return new Violation('NOT_MULTIPLE_OF', $this->message ?? "must be a multiple of {$this->step}", ['step' => $this->step]);
     }
 }

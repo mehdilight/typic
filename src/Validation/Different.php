@@ -15,8 +15,8 @@ final class Different implements DependentRule
     ) {
     }
 
-    public function check(mixed $value, array $input): ?string
+    public function check(mixed $value, array $input): ?Violation
     {
-        return $value !== ($input[$this->field] ?? null) ? null : ($this->message ?? "must be different from {$this->field}");
+        return $value !== ($input[$this->field] ?? null) ? null : new Violation('DIFFERENT', $this->message ?? "must be different from {$this->field}", ['field' => $this->field]);
     }
 }

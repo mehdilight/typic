@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace Typic\Tests;
 
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 use Typic\Server\TypicServer;
+use Typic\Tests\Support\Violations;
+use Typic\Tests\ValidationFixtures\HandleRules;
 use Typic\Tests\ValidationFixtures\SignupResolver;
 use Typic\Typic;
+use Typic\Validation\ValidationError;
+use Typic\Validation\Validator;
 
 class ValidationTest extends TestCase
 {
@@ -58,7 +63,7 @@ class ValidationTest extends TestCase
             'input.tags' => ['must have at most 3 items'],
             'input.previousAddresses.1.country' => ['must be a 2-letter country code'],
             'input.phone' => ['must contain only digits and spaces'],
-        ], $error['extensions']['validation']);
+        ], Violations::messages($error));
         $this->assertSame('Invalid input: input.username is reserved; input.email must be a valid email address; and 8 more.', $error['message']);
         $this->assertSame(0, SignupResolver::$calls);
     }
@@ -67,10 +72,10 @@ class ValidationTest extends TestCase
     {
         $result = $this->server()->execute(self::SIGNUP, ['input' => ['username' => ''] + $this->validInput()]);
 
-        $this->assertSame(['input.username' => ['must not be blank']], $result['errors'][0]['extensions']['validation']);
+        $this->assertSame(['input.username' => ['must not be blank']], Violations::messages($result['errors'][0]));
 
         $long = $this->server()->execute(self::SIGNUP, ['input' => ['username' => str_repeat('x', 21)] + $this->validInput()]);
-        $this->assertSame(['input.username' => ['must be at most 20 characters']], $long['errors'][0]['extensions']['validation']);
+        $this->assertSame(['input.username' => ['must be at most 20 characters']], Violations::messages($long['errors'][0]));
     }
 
     public function test_rules_on_resolver_arguments_use_graphql_names(): void
@@ -80,7 +85,7 @@ class ValidationTest extends TestCase
         $this->assertSame([
             'term' => ['must be at least 2 characters'],
             'first' => ['must be between 1 and 50'],
-        ], $result['errors'][0]['extensions']['validation']);
+        ], Violations::messages($result['errors'][0]));
         $this->assertSame(0, SignupResolver::$calls);
 
         $this->assertSame(['data' => ['search' => ['ok', 'ok']]], $this->server()->execute('{ search(term: "ok") }'));
@@ -108,7 +113,7 @@ class ValidationTest extends TestCase
             'input.tags.2' => ['must be at most 5 characters'],
             'input.tags.3' => ['must contain only letters, numbers, dashes and underscores'],
             'input.trialEndsAt' => ['must be after trialStartsAt'],
-        ], $result['errors'][0]['extensions']['validation']);
+        ], Violations::messages($result['errors'][0]));
 
         $valid = $this->server()->execute($mutation, ['input' => [
             'password' => 'long enough',
@@ -129,7 +134,7 @@ class ValidationTest extends TestCase
         $this->assertSame([
             'input.child.name' => ['must not be blank'],
             'input.child.child.name' => ['must not be blank'],
-        ], $result['errors'][0]['extensions']['validation'] ?? null);
+        ], Violations::messages($result['errors'][0]));
         $this->assertSame(0, SignupResolver::$calls);
     }
 
@@ -144,5 +149,55 @@ class ValidationTest extends TestCase
     private function server(): TypicServer
     {
         return Typic::builder()->registerResolvers([SignupResolver::class])->build();
+    }
+
+    public function test_violations_are_structured_with_codes_and_params(): void
+    {
+        $result = $this->server()->execute(self::SIGNUP, ['input' => ['username' => str_repeat('x', 21)] + $this->validInput()]);
+
+        $this->assertSame([[
+            'path' => 'input.username',
+            'code' => 'TOO_LONG',
+            'message' => 'must be at most 20 characters',
+            'params' => ['min' => null, 'max' => 20, 'unit' => 'characters'],
+        ]], json_decode((string) json_encode($result['errors'][0]['extensions']['violations']), true));
+    }
+
+    public function test_a_failed_not_blank_ends_the_field_and_bail_stops_at_the_first_problem(): void
+    {
+        $this->assertSame([
+            'all' => [['BLANK', 'must not be blank']],
+            'bail' => [['TOO_SHORT', 'must be at least 3 characters']],
+        ], $this->violations(['all' => '  ', 'bail' => 'A1']));
+
+        $this->assertSame([
+            'all' => [['TOO_SHORT', 'must be at least 3 characters'], ['INVALID_FORMAT', 'has an invalid format']],
+        ], $this->violations(['all' => 'A1']));
+    }
+
+    public function test_ordinary_rules_skip_null_and_blank_strings(): void
+    {
+        $this->assertSame([], $this->violations(['all' => 'ok-handle', 'optional' => '   ']));
+        $this->assertSame([], $this->violations(['all' => 'ok-handle', 'optional' => null]));
+    }
+
+    /**
+     * @param array<string, mixed> $args
+     * @return array<string, list<array{string, string}>>
+     */
+    private function violations(array $args): array
+    {
+        try {
+            (new Validator())->validate(new ReflectionMethod(HandleRules::class, 'check'), $args);
+
+            return [];
+        } catch (ValidationError $error) {
+            $found = [];
+            foreach ($error->violations() as $item) {
+                $found[$item['path']][] = [$item['violation']->code, $item['violation']->message];
+            }
+
+            return $found;
+        }
     }
 }
