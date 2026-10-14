@@ -7,7 +7,7 @@ namespace Typic\Server;
 use GraphQL\Validator\DocumentValidator;
 use GraphQL\Validator\Rules\DisableIntrospection;
 use GraphQL\Validator\Rules\QueryComplexity;
-use GraphQL\Validator\Rules\QueryDepth;
+use GraphQL\Validator\Rules\QueryDepth as BaseQueryDepth;
 use GraphQL\Validator\Rules\ValidationRule;
 
 /**
@@ -36,7 +36,7 @@ final class QueryLimits
         // New instances each time: these rules keep state while they run
         $rules = DocumentValidator::allRules();
         if ($this->maxDepth !== null) {
-            $rules[QueryDepth::class] = new QueryDepth($this->maxDepth);
+            $rules[BaseQueryDepth::class] = new QueryDepth($this->maxDepth);
         }
         if ($this->maxComplexity !== null) {
             $rules[QueryComplexity::class] = new QueryComplexity($this->maxComplexity);

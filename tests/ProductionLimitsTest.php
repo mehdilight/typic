@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Typic\Tests;
 
 use Nyholm\Psr7\ServerRequest;
+use GraphQL\Type\Introspection;
 use PHPUnit\Framework\TestCase;
 use Typic\Server\TypicBuilder;
 use Typic\Subscription\Protocol\GraphqlWsHandler;
@@ -20,6 +21,24 @@ use Typic\Typic;
 
 class ProductionLimitsTest extends TestCase
 {
+    public function test_explorer_introspection_works_without_relaxing_application_depth(): void
+    {
+        $server = $this->library()->withQueryLimits(maxDepth: 1, maxComplexity: 200)->build();
+
+        $schema = $server->execute(Introspection::getIntrospectionQuery());
+        $this->assertArrayNotHasKey('errors', $schema);
+        $this->assertNotEmpty($schema['data']['__schema']['types']);
+
+        $type = $server->execute('{ schema: __type(name: "Book") { fields { type { ofType { ofType { name } } } } } }');
+        $this->assertArrayNotHasKey('errors', $type);
+
+        $deep = $server->execute('{ schema: __schema { queryType { fields { type { name } } } } authors { books { author { name } } } }');
+        $this->assertSame('Max query depth should be 1 but got 2.', $deep['errors'][0]['message']);
+
+        // A previous schema request cannot influence the next application's depth.
+        $this->assertArrayNotHasKey('errors', $server->execute('{ books { title } }'));
+    }
+
     public function test_queries_deeper_than_the_limit_are_refused(): void
     {
         // Root fields are level 0: authors 0, books 1, author 2
