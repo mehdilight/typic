@@ -567,6 +567,30 @@ final class NotReserved implements Rule
 }
 ```
 
+**Partial updates.** Implement `PresenceAware` with the `TracksPresence` trait to tell a field the client left out from one sent as `null`, so omitted can mean "unchanged" and `null` "clear":
+
+```php
+use Typic\Input\PresenceAware;
+use Typic\Input\TracksPresence;
+
+#[InputType]
+final class UpdateProfileInput implements PresenceAware
+{
+    use TracksPresence;
+
+    public function __construct(
+        #[Field(nullable: true)] public ?string $name,
+        #[Field(nullable: true)] public ?string $bio,
+    ) {}
+}
+
+if ($input->has('bio')) {
+    $profile->bio = $input->bio; // null clears it
+}
+```
+
+`has()` takes PHP property names, also for renamed fields, and `presentFields()` lists them; nested inputs track their own fields. A field with a default value always counts as present, and a PHP default such as `= null` becomes a GraphQL default, so leave tracked fields without one.
+
 For files, type arguments or input properties as `Psr\Http\Message\UploadedFileInterface`. Clients send the [GraphQL multipart request format](https://github.com/jaydenseric/graphql-multipart-request-spec), with `operations`, `map`, and file parts, plus the preflight header above. File lists use `#[Arg(arrayOf: UploadedFileInterface::class)]`. One file can map to several null placeholders; batched operations are currently unsupported.
 
 ```php

@@ -22,6 +22,7 @@ use Typic\Attribute\InputType;
 use Typic\Attribute\Payload as PayloadAttr;
 use Typic\Context;
 use Typic\DataLoader\DataLoader;
+use Typic\Input\PresenceAware;
 use Typic\Middleware\ResolverCall;
 use Typic\Subscription\PubSub\PubSubInterface;
 
@@ -251,36 +252,40 @@ class ArgumentHydrator
         $refClass = new ReflectionClass($className);
         $constructor = $refClass->getConstructor();
 
+        $present = [];
         if ($constructor === null || empty($constructor->getParameters())) {
             $instance = $refClass->newInstance();
             foreach ($refClass->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
                 $key = self::graphQLName($prop);
                 if (array_key_exists($key, $data)) {
                     $prop->setValue($instance, $this->castValueToType($data[$key], $prop->getType()));
+                    $present[] = $prop->getName();
                 }
             }
-            return $instance;
-        }
+        } else {
+            $args = [];
+            foreach ($constructor->getParameters() as $param) {
+                $name = $param->getName();
+                $key = self::graphQLName($param);
 
-        $args = [];
-        foreach ($constructor->getParameters() as $param) {
-            $name = $param->getName();
-            $key = self::graphQLName($param);
-            $paramType = $param->getType();
-
-            if (array_key_exists($key, $data)) {
-                $val = $data[$key];
-                $args[$name] = $this->castValueToType($val, $paramType);
-            } elseif ($param->isDefaultValueAvailable()) {
-                $args[$name] = $param->getDefaultValue();
-            } elseif ($paramType !== null && $paramType->allowsNull()) {
-                $args[$name] = null;
-            } else {
-                $args[$name] = null;
+                if (array_key_exists($key, $data)) {
+                    $args[$name] = $this->castValueToType($data[$key], $param->getType());
+                    $present[] = $name;
+                } elseif ($param->isDefaultValueAvailable()) {
+                    $args[$name] = $param->getDefaultValue();
+                } else {
+                    $args[$name] = null;
+                }
             }
+            $instance = $refClass->newInstanceArgs($args);
         }
 
-        return $refClass->newInstanceArgs($args);
+        // GraphQL coercion leaves omitted fields out of $data, so presence tells "omitted" from "null"
+        if ($instance instanceof PresenceAware) {
+            $instance->withPresentFields($present);
+        }
+
+        return $instance;
     }
 
     /**
