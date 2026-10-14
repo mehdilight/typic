@@ -50,6 +50,19 @@ class TypicTest extends TestCase
         $this->assertSame('Hello worl...', $result['data']['posts'][0]['snippet']);
     }
 
+    public function test_the_type_loader_returns_the_schema_root_types(): void
+    {
+        $schema = Typic::builder()
+            ->registerResolvers([PostResolver::class, PostFieldResolver::class])
+            ->registerTypes([Post::class, User::class, StatusEnum::class, CreatePostInput::class, PostMetadataInput::class])
+            ->build()
+            ->getSchema();
+
+        $schema->assertValid();
+        $this->assertSame($schema->getQueryType(), $schema->getType('Query'));
+        $this->assertSame($schema->getMutationType(), $schema->getType('Mutation'));
+    }
+
     public function test_enum_filtering_in_query(): void
     {
         $server = Typic::builder()

@@ -155,12 +155,15 @@ class SchemaCompiler
             'fields' => fn (): array => $subscriptionFields,
         ]) : null;
 
+        // Root types are not in the registry; the loader must return these exact instances
+        $roots = array_filter(['Query' => $queryType, 'Mutation' => $mutationType, 'Subscription' => $subscriptionType]);
+
         return new Schema([
             'query' => $queryType,
             'mutation' => $mutationType,
             'subscription' => $subscriptionType,
             // Types load by name as queries need them, so a query only builds the fields it touches
-            'typeLoader' => fn (string $name): (Type&NamedType)|null => $this->loadType($name),
+            'typeLoader' => fn (string $name): (Type&NamedType)|null => $roots[$name] ?? $this->loadType($name),
             'types' => fn (): array => array_values($this->allTypes()),
             // Typic never replaces Int, String, etc.; saying so keeps graphql-php from loading every type to check
             'scalarOverrides' => [],
