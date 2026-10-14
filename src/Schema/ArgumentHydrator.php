@@ -216,7 +216,7 @@ class ArgumentHydrator
 
         if (array_key_exists($argName, $args)) {
             $rawVal = $args[$argName];
-            return $this->castValueToType($rawVal, $type);
+            return $this->castValueToType($rawVal, $type, self::itemClass($param));
         }
 
         // Only parameters absent from the GraphQL schema are service dependencies.
@@ -258,7 +258,7 @@ class ArgumentHydrator
             foreach ($refClass->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
                 $key = self::graphQLName($prop);
                 if (array_key_exists($key, $data)) {
-                    $prop->setValue($instance, $this->castValueToType($data[$key], $prop->getType()));
+                    $prop->setValue($instance, $this->castValueToType($data[$key], $prop->getType(), self::itemClass($prop)));
                     $present[] = $prop->getName();
                 }
             }
@@ -269,7 +269,7 @@ class ArgumentHydrator
                 $key = self::graphQLName($param);
 
                 if (array_key_exists($key, $data)) {
-                    $args[$name] = $this->castValueToType($data[$key], $param->getType());
+                    $args[$name] = $this->castValueToType($data[$key], $param->getType(), self::itemClass($param));
                     $present[] = $name;
                 } elseif ($param->isDefaultValueAvailable()) {
                     $args[$name] = $param->getDefaultValue();
@@ -298,14 +298,37 @@ class ArgumentHydrator
         return ($attrs !== [] ? $attrs[0]->newInstance()->name : null) ?? $member->getName();
     }
 
-    private function castValueToType(mixed $val, ?\ReflectionType $type): mixed
+    /**
+     * The class of a list's items, from #[Field(arrayOf: ...)] or #[Arg(arrayOf: ...)], when it is an enum or
+     * input class rather than a scalar name such as 'string' or 'ID'.
+     *
+     * @return class-string|null
+     */
+    private static function itemClass(ReflectionParameter|\ReflectionProperty $member): ?string
     {
+        $field = $member->getAttributes(\Typic\Attribute\Field::class);
+        $arg = $member->getAttributes(Arg::class);
+        $arrayOf = $field !== [] ? $field[0]->newInstance()->arrayOf : ($arg !== [] ? $arg[0]->newInstance()->arrayOf : null);
+
+        return is_string($arrayOf) && (enum_exists($arrayOf) || class_exists($arrayOf)) ? $arrayOf : null;
+    }
+
+    /** @param class-string|null $itemClass For lists: hydrate each item as this enum or input class. */
+    private function castValueToType(mixed $val, ?\ReflectionType $type, ?string $itemClass = null): mixed
+    {
+        if ($itemClass !== null && is_array($val)) {
+            return array_map(fn (mixed $item): mixed => $item === null ? null : $this->castToClass($item, $itemClass), $val);
+        }
         if ($val === null || !$type instanceof ReflectionNamedType || $type->isBuiltin()) {
             return $val;
         }
 
-        $className = $type->getName();
+        return $this->castToClass($val, $type->getName());
+    }
 
+    /** @param class-string|string $className */
+    private function castToClass(mixed $val, string $className): mixed
+    {
         if ($val instanceof $className) {
             return $val;
         }
